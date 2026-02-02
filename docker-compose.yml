@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # Admin Web App
+  greenhat-admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: greenhat-admin
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"  # Only localhost (WireGuard)
+    environment:
+      # Database
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      
+      # Admin MCP
+      - ADMIN_MCP_URL=http://greenhat-admin-mcp:4002
+      - ADMIN_MCP_TOKEN=${ADMIN_MCP_TOKEN}
+      
+      # Admin Auth
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
+      
+      # Security
+      - NODE_ENV=production
+      
+    networks:
+      - admin-internal
+    volumes:
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # Admin MCP Server
+  greenhat-admin-mcp:
+    build:
+      context: ./mcp-admin
+      dockerfile: Dockerfile
+    container_name: greenhat-admin-mcp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4002:4002"  # Only localhost
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - MCP_PORT=4002
+      - MCP_AUTH_TOKEN=${ADMIN_MCP_TOKEN}
+      - LOG_LEVEL=info
+    networks:
+      - admin-internal
+    volumes:
+      - ./mcp-admin/logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # WireGuard VPN
+  wireguard:
+    image: linuxserver/wireguard
+    container_name: greenhat-wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - SERVERURL=${WIREGUARD_SERVER_URL}
+      - SERVERPORT=51820
+      - PEERS=admin1,admin2,admin3
+      - PEERDNS=auto
+      - INTERNAL_SUBNET=10.13.13.0
+    volumes:
+      - ./wireguard:/config
+      - /lib/modules:/lib/modules
+    ports:
+      - "51820:51820/udp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+
+networks:
+  admin-internal:
+    internal: true

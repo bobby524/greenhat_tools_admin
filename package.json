@@ -1,0 +1,27 @@
+{
+  "name": "greenhat-tools-admin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4000",
+    "build": "next build",
+    "start": "next start -p 4000",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.91.0",
+    "lucide-react": "^0.460.0",
+    "next": "^14.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5",
+    "vitest": "^1.0.0"
+  }
+}
