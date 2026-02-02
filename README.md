@@ -14,21 +14,30 @@ Security-hardened admin panel with multiple deployment options:
 User → Vercel Edge → Admin UI / MCP Edge Functions → Supabase
 ```
 
-## Quick Deploy
+## Quick Deploy with Doppler + Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,ADMIN_MCP_TOKEN,ADMIN_USERNAME,ADMIN_PASSWORD&project-name=greenhat-admin&repository-name=greenhat-admin)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=DOPPLER_TOKEN&project-name=greenhat-admin&repository-name=greenhat-admin)
 
-**One-click deploy to Vercel in 30 seconds!**
+**One-click deploy to Vercel with Doppler secrets management!**
 
-## Required Environment Variables
+### Why Doppler?
+- ✅ Secrets never stored in Vercel
+- ✅ Centralized management
+- ✅ Automatic rotation
+- ✅ Team access controls
+- ✅ Version history
 
-| Variable | Description |
+### Required Secrets (in Doppler)
+
+| Secret | Description |
 |----------|-------------|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (NOT anon key!) |
 | `ADMIN_MCP_TOKEN` | Random secret token for MCP auth |
 | `ADMIN_USERNAME` | Admin login username |
 | `ADMIN_PASSWORD` | Admin login password |
+
+**Only `DOPPLER_TOKEN` goes in Vercel - all other secrets stay in Doppler!**
 
 ## Modules
 

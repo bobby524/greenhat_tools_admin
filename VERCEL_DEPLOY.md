@@ -48,66 +48,167 @@ Deploy Greenhat Tools Admin to Vercel with one-click deployment and zero configu
 
 ## Deployment Options
 
-### Option A: One-Click Deploy (Recommended)
+### Option A: One-Click Deploy with Doppler (Recommended)
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,ADMIN_MCP_TOKEN,NEXTAUTH_SECRET&project-name=greenhat-admin&repository-name=greenhat-admin)
+⚠️ **Note:** This button deploys to Vercel, but you'll configure secrets in Doppler (not Vercel).
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=DOPPLER_TOKEN&project-name=greenhat-admin&repository-name=greenhat-admin)
 
 **Steps:**
-1. Click the "Deploy" button above
-2. Connect your GitHub account
-3. Set environment variables (see below)
-4. Click "Deploy"
-5. Done! 🎉
+1. **Click the Deploy button** above
+2. **Connect GitHub** and create project
+3. **Set only `DOPPLER_TOKEN`** in Vercel (get from Doppler dashboard)
+4. **Configure Doppler** (see Secrets Management section below)
+5. **Deploy** - All other secrets come from Doppler!
 
-### Option B: CLI Deployment
+### Option B: Manual Deploy with Doppler
 
 ```bash
-# Install Vercel CLI
-npm i -g vercel
+# 1. Clone repo
+git clone https://github.com/bobby524/greenhat_tools_admin.git
+cd greenhat_tools_admin
 
+# 2. Setup Doppler (see Secrets Management below)
+doppler login
+doppler setup --project greenhat-admin --config prd
+
+# 3. Get Doppler token for Vercel
+doppler configs tokens create vercel-token --project greenhat-admin --config prd
+# Save this token!
+
+# 4. Deploy to Vercel
+npm i -g vercel
+vercel login
+vercel --prod
+
+# 5. Set ONLY DOPPLER_TOKEN in Vercel
+vercel env add DOPPLER_TOKEN
+# Enter the token from step 3
+```
+
+### Option C: GitHub Integration + Doppler
+
+1. Fork/clone: https://github.com/bobby524/greenhat_tools_admin
+2. Go to https://vercel.com/dashboard → Add New Project
+3. Import your GitHub repo
+4. **Set only `DOPPLER_TOKEN`** in environment variables
+5. **Connect Doppler integration** (see below)
+6. Deploy
+
+## Secrets Management with Doppler (Recommended)
+
+**Don't store secrets in Vercel!** Use Doppler for secure secrets management.
+
+### Why Doppler?
+- ✅ Centralized secrets across all environments
+- ✅ Automatic rotation
+- ✅ Access logging
+- ✅ Team permissions
+- ✅ Version history
+- ✅ Syncs to Vercel at build time
+
+### Setup Doppler + Vercel
+
+#### 1. Create Doppler Project
+
+```bash
+# Install Doppler CLI
+brew install dopplerhq/cli/doppler
+
+# Login
+doppler login
+
+# Create project for admin
+doppler projects create greenhat-admin
+
+# Create environments
+doppler environments create prd --project greenhat-admin
+```
+
+#### 2. Add Secrets to Doppler
+
+```bash
+# Set secrets in Doppler (not in Vercel!)
+doppler secrets set SUPABASE_URL "https://your-project.supabase.co" --project greenhat-admin --config prd
+doppler secrets set SUPABASE_SERVICE_ROLE_KEY "your-service-role-key" --project greenhat-admin --config prd
+doppler secrets set ADMIN_MCP_TOKEN "$(openssl rand -hex 32)" --project greenhat-admin --config prd
+doppler secrets set ADMIN_USERNAME "admin" --project greenhat-admin --config prd
+doppler secrets set ADMIN_PASSWORD "your-secure-password" --project greenhat-admin --config prd
+
+# Verify
+doppler secrets --project greenhat-admin --config prd
+```
+
+#### 3. Connect Doppler to Vercel
+
+**Option A: Doppler Vercel Integration (Easiest)**
+
+1. Go to [Doppler Dashboard](https://dashboard.doppler.com)
+2. Select your project → Integrations
+3. Click "Add Integration" → Select "Vercel"
+4. Connect your Vercel account
+5. Choose which Vercel project to sync
+6. Map Doppler config to Vercel environment
+7. Secrets auto-sync on every deploy!
+
+**Option B: Doppler CLI in Build (More Control)**
+
+Update `vercel.json`:
+```json
+{
+  "buildCommand": "doppler run -- npm run build",
+  "installCommand": "npm install && curl -Ls --tlsv1.2 --proto \"=https\" --retry 3 https://cli.doppler.com/install.sh | sh"
+}
+```
+
+Add Doppler token to Vercel:
+```bash
+# Get Doppler service token
+doppler configs tokens create vercel-token --project greenhat-admin --config prd
+
+# Add to Vercel (only this one secret!)
+vercel env add DOPPLER_TOKEN
+```
+
+#### 4. Update Build Scripts
+
+```json
+// package.json
+{
+  "scripts": {
+    "build": "next build",
+    "vercel-build": "doppler run -- npm run build"
+  }
+}
+```
+
+### Required Secrets in Doppler
+
+| Secret | Description |
+|----------|-------------|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (NOT anon key!) |
+| `ADMIN_MCP_TOKEN` | Random secret token for MCP auth |
+| `ADMIN_USERNAME` | Admin login username |
+| `ADMIN_PASSWORD` | Admin login password |
+
+### Local Development with Doppler
+
+```bash
 # Clone repo
 git clone https://github.com/bobby524/greenhat_tools_admin.git
 cd greenhat_tools_admin
 
-# Login to Vercel
-vercel login
+# Install dependencies
+npm install
 
-# Deploy
-vercel --prod
+# Run with Doppler secrets
+doppler run -- npm run dev
 
-# Set environment variables
-vercel env add SUPABASE_URL
-vercel env add SUPABASE_SERVICE_ROLE_KEY
-vercel env add ADMIN_MCP_TOKEN
-vercel env add NEXTAUTH_SECRET
+# Or configure once
+doppler setup --project greenhat-admin --config prd
+npm run dev  # Doppler auto-injects secrets
 ```
-
-### Option C: GitHub Integration
-
-1. Fork/clone: https://github.com/bobby524/greenhat_tools_admin
-2. Go to https://vercel.com/dashboard
-3. Click "Add New Project"
-4. Import your GitHub repo
-5. Configure environment variables
-6. Deploy
-
-## Required Environment Variables
-
-| Variable | Description | Where to Get |
-|----------|-------------|--------------|
-| `SUPABASE_URL` | Your Supabase project URL | Supabase Dashboard → Settings → API |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (NOT anon key) | Supabase Dashboard → Settings → API |
-| `ADMIN_MCP_TOKEN` | Secret token for MCP auth | Generate random string |
-| `NEXTAUTH_SECRET` | NextAuth.js secret | Generate: `openssl rand -base64 32` |
-
-### Optional Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis URL (for rate limiting) | - |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis token | - |
-| `ADMIN_USERNAME` | Admin login username | `admin` |
-| `ADMIN_PASSWORD_HASH` | SHA256 hash of password | - |
 
 ## Security Configuration
 
