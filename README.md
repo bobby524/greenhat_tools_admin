@@ -4,39 +4,73 @@ Platform-wide administrative interface for greenhat_tools.
 
 ## Overview
 
-Security-hardened admin panel deployed on Hetzner VPS with VPN-only access.
+Security-hardened admin panel with multiple deployment options:
+- **Vercel** (Recommended) - Zero-config, auto-deploy, global CDN
+- **Hetzner** - Self-hosted, VPN-only access
 
-## Architecture
+## Architecture (Vercel)
 
 ```
-Internet → Hetzner VPS → WireGuard VPN → Admin Panel
+User → Vercel Edge → Admin UI / MCP Edge Functions → Supabase
 ```
 
-## Access
+## Quick Deploy
 
-1. Connect to WireGuard VPN
-2. Visit: http://10.13.13.1:4000
-3. Login with admin credentials
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,ADMIN_MCP_TOKEN,ADMIN_USERNAME,ADMIN_PASSWORD&project-name=greenhat-admin&repository-name=greenhat-admin)
+
+**One-click deploy to Vercel in 30 seconds!**
+
+## Required Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SUPABASE_URL` | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (NOT anon key!) |
+| `ADMIN_MCP_TOKEN` | Random secret token for MCP auth |
+| `ADMIN_USERNAME` | Admin login username |
+| `ADMIN_PASSWORD` | Admin login password |
 
 ## Modules
 
 - `/admin/crm` - Customer management
-- `/admin/exponential` - User & security management
+- `/admin/exponential` - User & security management  
 - `/admin/soc2` - Compliance & audit
 - `/admin/system` - Global settings & backups
+- `/admin/audit` - Platform audit logs
 
-## Deployment
+## Deployment Options
 
-```bash
-./scripts/deploy-hetzner.sh
-```
+### Option 1: Vercel (Recommended)
+See [VERCEL_DEPLOY.md](./VERCEL_DEPLOY.md) for detailed instructions.
+
+**Pros:**
+- ✅ One-click deployment
+- ✅ Auto-deploys on every push
+- ✅ Global CDN
+- ✅ Zero server management
+- ✅ Preview deployments
+
+### Option 2: Hetzner VPS
+See [HETZNER_SETUP.md](./HETZNER_SETUP.md) for VPN-only self-hosted deployment.
+
+**Pros:**
+- ✅ Complete control
+- ✅ VPN-only access
+- ✅ No vendor lock-in
 
 ## Security
 
-- VPN-only access (WireGuard)
-- All actions logged
-- SECRET-level MCP tools only
+- All tools require SECRET-level ACL
+- Password-protected (Vercel) or VPN-only (Hetzner)
+- All actions audited
+- IP whitelisting support
+- Rate limiting
 
 ## Repo
 
 https://github.com/bobby524/greenhat_tools_admin
+
+## Documentation
+
+- [VERCEL_DEPLOY.md](./VERCEL_DEPLOY.md) - Vercel deployment guide
+- [HETZNER_SETUP.md](./HETZNER_SETUP.md) - Hetzner self-hosted guide
