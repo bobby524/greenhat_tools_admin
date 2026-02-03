@@ -1,3 +1,5 @@
+"use client";
+
 export default function AdminDashboard() {
   return (
     <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
