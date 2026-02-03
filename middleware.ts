@@ -12,8 +12,11 @@ function checkPassword(request: NextRequest): boolean {
   const credentials = atob(authHeader.slice(6))
   const [username, password] = credentials.split(':')
   
-  return username === process.env.ADMIN_USERNAME && 
-         password === process.env.ADMIN_PASSWORD
+  const expectedUsername = process.env.ADMIN_USERNAME || 'admin'
+  // Support both ADMIN_PASSWORD and ADMIN_PASSWORD_HASH for backwards compatibility
+  const expectedPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD_HASH
+  
+  return username === expectedUsername && password === expectedPassword
 }
 
 export function middleware(request: NextRequest) {
