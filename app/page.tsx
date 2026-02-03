@@ -72,6 +72,11 @@ export default function AdminDashboard() {
             description="Platform-wide activity logs"
             href="/admin/audit"
           />
+          <AdminCard 
+            title="🛡️ MCP Firewall"
+            description="Manage tool permissions and security policies"
+            href="/admin/firewall"
+          />
         </div>
 
         <div style={{ marginTop: '40px', padding: '20px', background: '#f5f5f5', borderRadius: '8px' }}>

@@ -28,6 +28,7 @@ export default async function AdminLayout({
           <a href="/admin/soc2" style={{ color: '#ccc', textDecoration: 'none' }}>SOC2</a>
           <a href="/admin/system" style={{ color: '#ccc', textDecoration: 'none' }}>System</a>
           <a href="/admin/audit" style={{ color: '#ccc', textDecoration: 'none' }}>Audit</a>
+          <a href="/admin/firewall" style={{ color: '#ccc', textDecoration: 'none' }}>🛡️ Firewall</a>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ color: '#ccc', fontSize: '14px' }}>
