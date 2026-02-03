@@ -1,4 +1,5 @@
-import { UserButton, currentUser } from "@clerk/nextjs";
+import { UserButton } from "@clerk/nextjs";
+import { currentUser } from "@clerk/nextjs/server";
 
 export default async function AdminLayout({
   children,
