@@ -4,7 +4,7 @@ export default function AdminDashboard() {
   return (
     <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto' }}>
       <h1>🛡️ Greenhat Tools Admin</h1>
-      <p>Platform-wide administrative interface</p>
+      <p>Platform-wide administrative interface — Secure VPN access required</p>
       
       <div style={{ 
         display: 'grid', 
