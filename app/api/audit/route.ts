@@ -1,7 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 
-export const runtime = 'edge'
+// Simple test endpoint first
+export async function GET(request: NextRequest) {
+  console.log('Audit API called at:', new Date().toISOString())
+  
+  try {
+    return NextResponse.json({ 
+      message: 'Audit API is working',
+      timestamp: new Date().toISOString(),
+      env: {
+        hasUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+        hasKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY
+      }
+    })
+  } catch (error: any) {
+    console.error('Error:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
 
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
