@@ -9,8 +9,7 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "vercel-build": "doppler run -- npm run build",
-    "vercel-install": "npm install && (curl -Ls --tlsv1.2 --proto '=https' --retry 3 https://cli.doppler.com/install.sh | sh)"
+    "vercel-build": "next build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.91.0",
