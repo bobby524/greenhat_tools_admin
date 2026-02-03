@@ -1,4 +1,5 @@
 "use client";
+// Greenhat Admin Dashboard - VPN required
 
 export default function AdminDashboard() {
   return (
