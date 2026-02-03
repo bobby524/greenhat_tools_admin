@@ -9,6 +9,11 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:regression": "npx ts-node scripts/regression-tests.ts",
+    "type-check": "tsc --noEmit",
+    "docker:build": "docker build -t greenhat-tools-admin .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env.local greenhat-tools-admin",
     "vercel-build": "next build"
   },
   "dependencies": {
@@ -23,6 +28,7 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "ts-node": "^10.9.2",
     "typescript": "^5",
     "vitest": "^1.0.0"
   }
