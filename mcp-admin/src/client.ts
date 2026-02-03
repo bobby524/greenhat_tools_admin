@@ -25,6 +25,6 @@ export class ExponentialClient {
   }
 }
 
-export function createClient() {
+export function createExponentialClient() {
   return new ExponentialClient();
 }

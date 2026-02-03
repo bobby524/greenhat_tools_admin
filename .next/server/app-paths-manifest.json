@@ -1,0 +1,11 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/health/route": "app/api/health/route.js",
+  "/page": "app/page.js",
+  "/admin/soc2/page": "app/admin/soc2/page.js",
+  "/admin/crm/page": "app/admin/crm/page.js",
+  "/admin/exponential/page": "app/admin/exponential/page.js",
+  "/admin/audit/page": "app/admin/audit/page.js",
+  "/admin/system/page": "app/admin/system/page.js",
+  "/api/mcp/route": "app/api/mcp/route.js"
+}
