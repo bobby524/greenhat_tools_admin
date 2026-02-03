@@ -1,96 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 export const runtime = 'edge'
 
-interface AuditLog {
-  id: string
-  timestamp: string
-  sessionId: string
-  tool: string
-  action: 'call' | 'block' | 'error' | 'auth' | 'config_change'
-  status: 'success' | 'blocked' | 'error' | 'warning'
-  details?: string
-  ip?: string
-  userAgent?: string
-  metadata?: Record<string, any>
-}
-
-// Mock audit logs (in production, fetch from Supabase or logging service)
-const mockAuditLogs: AuditLog[] = [
-  {
-    id: 'log-001',
-    timestamp: new Date(Date.now() - 3500000).toISOString(),
-    sessionId: 'sess-001',
-    tool: 'crm_list_all_customers',
-    action: 'call',
-    status: 'success',
-    details: 'Retrieved 47 customers',
-    ip: '10.0.0.1',
-  },
-  {
-    id: 'log-002',
-    timestamp: new Date(Date.now() - 3200000).toISOString(),
-    sessionId: 'sess-001',
-    tool: 'crm_delete_customer',
-    action: 'block',
-    status: 'blocked',
-    details: 'Rate limit exceeded: 15 requests/minute',
-    ip: '10.0.0.1',
-    metadata: { rateLimit: 10, window: '1m' }
-  },
-  {
-    id: 'log-003',
-    timestamp: new Date(Date.now() - 1800000).toISOString(),
-    sessionId: 'sess-001',
-    tool: 'admin_get_audit_logs',
-    action: 'call',
-    status: 'success',
-    details: 'Retrieved 150 logs',
-    ip: '10.0.0.1',
-  },
-  {
-    id: 'log-004',
-    timestamp: new Date(Date.now() - 7100000).toISOString(),
-    sessionId: 'sess-002',
-    tool: 'crm_delete_customer',
-    action: 'block',
-    status: 'blocked',
-    details: 'Lethal trifecta detected: write + private data + destructive operation',
-    ip: '10.0.0.2',
-    metadata: { flags: ['writeOperation', 'readPrivateData', 'destructive'] }
-  },
-  {
-    id: 'log-005',
-    timestamp: new Date(Date.now() - 600000).toISOString(),
-    sessionId: 'sess-001',
-    tool: 'system_health_check',
-    action: 'call',
-    status: 'success',
-    details: 'All systems operational',
-    ip: '10.0.0.1',
-  },
-  {
-    id: 'log-006',
-    timestamp: new Date(Date.now() - 300000).toISOString(),
-    sessionId: 'sess-003',
-    tool: 'admin_list_all_users',
-    action: 'call',
-    status: 'warning',
-    details: 'High frequency detected: 3 calls in 5 minutes',
-    ip: '10.0.0.3',
-    metadata: { frequency: 'high', callsInWindow: 3 }
-  },
-  {
-    id: 'log-007',
-    timestamp: new Date(Date.now() - 120000).toISOString(),
-    sessionId: 'system',
-    tool: 'firewall_config',
-    action: 'config_change',
-    status: 'success',
-    details: 'Updated tool permissions for crm_delete_customer',
-    metadata: { changedBy: 'admin', changes: ['rateLimit'] }
-  },
-]
+// Initialize Supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 export async function GET(request: NextRequest) {
   try {
@@ -101,43 +17,85 @@ export async function GET(request: NextRequest) {
     const tool = searchParams.get('tool')
     const limit = parseInt(searchParams.get('limit') || '50')
     
-    let logs = [...mockAuditLogs]
+    // Build the query
+    let query = supabase
+      .from('mcp_audit_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit)
     
     // Apply filters
     if (since) {
-      const sinceDate = new Date(since).getTime()
-      logs = logs.filter(l => new Date(l.timestamp).getTime() >= sinceDate)
+      query = query.gte('created_at', since)
     }
     
     if (action) {
-      logs = logs.filter(l => l.action === action)
+      query = query.eq('action', action)
     }
     
     if (status) {
-      logs = logs.filter(l => l.status === status)
+      query = query.eq('status', status)
     }
     
     if (tool) {
-      logs = logs.filter(l => l.tool === tool)
+      query = query.eq('tool_name', tool)
     }
     
-    // Sort by timestamp descending
-    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    const { data: logs, error } = await query
     
-    // Apply limit
-    logs = logs.slice(0, limit)
+    if (error) {
+      console.error('Supabase error:', error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+    
+    // Get stats
+    const { data: statsData, error: statsError } = await supabase
+      .from('mcp_audit_logs')
+      .select('status', { count: 'exact' })
+    
+    if (statsError) {
+      console.error('Stats error:', statsError)
+    }
     
     // Calculate stats
+    const total = logs?.length || 0
+    const blocked = logs?.filter((l: any) => l.status === 'blocked').length || 0
+    const errors = logs?.filter((l: any) => l.status === 'error').length || 0
+    const allowed = logs?.filter((l: any) => l.status === 'allowed').length || 0
+    
+    // Get last 24h count
+    const last24h = logs?.filter((l: any) => {
+      const logTime = new Date(l.created_at).getTime()
+      return logTime > Date.now() - 86400000
+    }).length || 0
+    
     const stats = {
-      total: mockAuditLogs.length,
-      blocked: mockAuditLogs.filter(l => l.status === 'blocked').length,
-      errors: mockAuditLogs.filter(l => l.status === 'error').length,
-      warnings: mockAuditLogs.filter(l => l.status === 'warning').length,
-      last24h: mockAuditLogs.filter(l => new Date(l.timestamp).getTime() > Date.now() - 86400000).length,
+      total,
+      blocked,
+      errors,
+      allowed,
+      last24h,
     }
     
+    // Transform logs to match the expected format
+    const transformedLogs = logs?.map((log: any) => ({
+      id: log.id,
+      timestamp: log.created_at,
+      sessionId: log.session_id,
+      tool: log.tool_name,
+      action: log.action,
+      status: log.status === 'allowed' ? 'success' : log.status,
+      details: log.error_message || `${log.action} on ${log.path}`,
+      metadata: {
+        duration_ms: log.duration_ms,
+        is_write: log.is_write,
+        tool_category: log.tool_category,
+        path: log.path,
+      },
+    })) || []
+    
     return NextResponse.json({
-      logs,
+      logs: transformedLogs,
       stats,
       updatedAt: new Date().toISOString(),
     })
