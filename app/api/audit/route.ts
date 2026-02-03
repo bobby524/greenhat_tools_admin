@@ -1,23 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
-// Simple test endpoint first
-export async function GET(request: NextRequest) {
-  console.log('Audit API called at:', new Date().toISOString())
-  
-  try {
-    return NextResponse.json({ 
-      message: 'Audit API is working',
-      timestamp: new Date().toISOString(),
-      env: {
-        hasUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
-        hasKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY
-      }
-    })
-  } catch (error: any) {
-    console.error('Error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-}
+export const runtime = 'edge'
 
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -25,7 +9,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 export async function GET(request: NextRequest) {
-  console.log('Audit API called')
+  console.log('Audit API called at:', new Date().toISOString())
+  
   try {
     const { searchParams } = new URL(request.url)
     const since = searchParams.get('since')
@@ -65,16 +50,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
     
-    // Get stats
-    const { data: statsData, error: statsError } = await supabase
-      .from('mcp_audit_logs')
-      .select('status', { count: 'exact' })
-    
-    if (statsError) {
-      console.error('Stats error:', statsError)
-    }
-    
-    // Calculate stats
+    // Calculate stats from the fetched logs
     const total = logs?.length || 0
     const blocked = logs?.filter((l: any) => l.status === 'blocked').length || 0
     const errors = logs?.filter((l: any) => l.status === 'error').length || 0
