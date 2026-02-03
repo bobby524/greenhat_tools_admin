@@ -140,19 +140,23 @@ export default function FirewallAdmin() {
     field: "requestsPerMinute" | "requestsPerHour",
     value: number
   ) => {
-    setConfig((prev) => ({
-      ...prev,
-      toolPermissions: {
-        ...prev.toolPermissions,
-        [toolName]: {
-          ...prev.toolPermissions[toolName],
-          rateLimit: {
-            ...prev.toolPermissions[toolName].rateLimit,
-            [field]: value,
+    setConfig((prev) => {
+      const currentTool = prev.toolPermissions[toolName];
+      const currentRateLimit = currentTool.rateLimit || { requestsPerMinute: 0, requestsPerHour: 0 };
+      return {
+        ...prev,
+        toolPermissions: {
+          ...prev.toolPermissions,
+          [toolName]: {
+            ...currentTool,
+            rateLimit: {
+              ...currentRateLimit,
+              [field]: value,
+            },
           },
         },
-      },
-    }));
+      };
+    });
   };
 
   const groupedTools = Object.entries(config.toolPermissions).reduce(
