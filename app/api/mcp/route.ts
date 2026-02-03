@@ -4,11 +4,17 @@ import { createClient } from '@supabase/supabase-js'
 export const runtime = 'edge'
 export const preferredRegion = 'iad1' // US East (N. Virginia)
 
-// Initialize Supabase
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Lazy initialization of Supabase client
+function getSupabase() {
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  
+  if (!url || !key) {
+    throw new Error('Missing Supabase environment variables')
+  }
+  
+  return createClient(url, key)
+}
 
 // Admin tool definitions
 const adminTools = [
@@ -88,6 +94,8 @@ function checkRateLimit(sessionId: string, tool: string): boolean {
 
 // Execute admin tool
 async function executeTool(name: string, args: any): Promise<any> {
+  const supabase = getSupabase()
+  
   switch (name) {
     case 'crm_list_all_customers':
       const { data: customers } = await supabase.from('customers').select('*')
