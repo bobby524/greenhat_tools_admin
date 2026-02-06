@@ -1,6 +1,5 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
-import { Pool } from "pg";
 
 // Get database URL
 function getDatabaseUrl(): string | null {
@@ -8,35 +7,15 @@ function getDatabaseUrl(): string | null {
          process.env.DATABASE_URL || 
          process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL || null;
-  console.log("[Auth] Database URL check:", url ? "Found" : "Not found", "Keys checked: POSTGRES_URL, DATABASE_URL, CRM_POSTGRES_URL, crm_POSTGRES_URL");
+  console.log("[Auth] Database URL check:", url ? "Found" : "Not found");
   return url;
-}
-
-// Get database pool
-function getDatabasePool() {
-  const databaseUrl = getDatabaseUrl();
-  if (!databaseUrl) return null;
-  
-  const dbUrl = process.env.CRM_POSTGRES_URL || process.env.crm_POSTGRES_URL || databaseUrl;
-  const isSupabase = dbUrl.includes('supabase.co');
-  
-  return new Pool({
-    connectionString: dbUrl,
-    ssl: isSupabase 
-      ? { rejectUnauthorized: false }
-      : undefined,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-  });
 }
 
 // Export auth config
 export function getAuthConfig(): BetterAuthOptions | null {
   const databaseUrl = getDatabaseUrl();
-  const pool = getDatabasePool();
   
-  if (!databaseUrl || !pool) {
+  if (!databaseUrl) {
     console.error("[Auth] Database not configured");
     return null;
   }
@@ -46,11 +25,18 @@ export function getAuthConfig(): BetterAuthOptions | null {
     return null;
   }
   
+  console.log("[Auth] Creating config with database URL:", databaseUrl.substring(0, 30) + "...");
+  console.log("[Auth] BETTER_AUTH_SECRET:", process.env.BETTER_AUTH_SECRET ? "Set" : "Not set");
+  console.log("[Auth] GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "Set" : "Not set");
+  
   return {
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
     trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-    database: pool,
+    database: {
+      provider: "pg",
+      url: databaseUrl,
+    },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
@@ -59,11 +45,6 @@ export function getAuthConfig(): BetterAuthOptions | null {
       google: {
         clientId: process.env.GOOGLE_CLIENT_ID || "",
         clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-        ...(process.env.GOOGLE_ALLOWED_DOMAIN ? {
-          authorization: {
-            params: { hd: process.env.GOOGLE_ALLOWED_DOMAIN },
-          },
-        } : {}),
       },
     },
     plugins: [
@@ -88,6 +69,8 @@ let authInstance: ReturnType<typeof betterAuth> | null = null;
 let initError: string | null = null;
 
 function createAuth() {
+  console.log("[Auth] Creating auth instance...");
+  
   const databaseUrl = getDatabaseUrl();
 
   if (!databaseUrl) {
@@ -110,11 +93,16 @@ function createAuth() {
       throw new Error("Failed to create auth config");
     }
     
+    console.log("[Auth] Initializing Better Auth...");
     const instance = betterAuth(config);
+    console.log("[Auth] Better Auth initialized successfully");
     return instance;
   } catch (error) {
     const err = error instanceof Error ? error.message : "Unknown error";
     console.error("[Auth] Failed to initialize:", err);
+    if (error instanceof Error && error.stack) {
+      console.error("[Auth] Stack:", error.stack);
+    }
     initError = err;
     return null;
   }
@@ -129,9 +117,11 @@ function getAuthInstance() {
 
 // Handler that initializes on first use
 async function handler(request: Request): Promise<Response> {
+  console.log("[Auth] Handler called for:", request.url);
   const instance = getAuthInstance();
   
   if (!instance) {
+    console.error("[Auth] Auth instance not available:", initError);
     return new Response(
       JSON.stringify({ 
         error: "Auth not configured", 
@@ -141,7 +131,16 @@ async function handler(request: Request): Promise<Response> {
     );
   }
 
-  return await instance.handler(request);
+  try {
+    return await instance.handler(request);
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    console.error("[Auth] Handler error:", err);
+    return new Response(
+      JSON.stringify({ error: "Auth handler error", message: err }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 }
 
 // Export auth object
