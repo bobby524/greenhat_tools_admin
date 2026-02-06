@@ -77,6 +77,11 @@ export default function AdminDashboard() {
             description="Manage tool permissions and security policies"
             href="/admin/firewall"
           />
+          <AdminCard 
+            title="👤 User Access"
+            description="Manage user roles, permissions, and access control"
+            href="/admin/users"
+          />
         </div>
 
         <div style={{ marginTop: '40px', padding: '20px', background: '#f5f5f5', borderRadius: '8px' }}>
