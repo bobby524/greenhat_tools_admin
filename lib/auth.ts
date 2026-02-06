@@ -41,7 +41,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
   console.log("[Auth] Database URL configured:", connectionString.substring(0, 40) + "...");
   console.log("[Auth] Is Supabase:", isSupabase);
   
-  return {
+  const config: BetterAuthOptions = {
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
     trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
@@ -74,6 +74,9 @@ export function getAuthConfig(): BetterAuthOptions | null {
       },
     },
   };
+  
+  console.log("[Auth] Config created successfully");
+  return config;
 }
 
 // Singleton auth instance
@@ -111,11 +114,10 @@ function createAuth() {
     return instance;
   } catch (error) {
     const err = error instanceof Error ? error.message : "Unknown error";
+    const stack = error instanceof Error ? error.stack : "";
     console.error("[Auth] Failed to initialize:", err);
-    if (error instanceof Error && error.stack) {
-      console.error("[Auth] Stack:", error.stack);
-    }
-    initError = err;
+    console.error("[Auth] Stack:", stack);
+    initError = err + (stack ? " | " + stack.substring(0, 200) : "");
     return null;
   }
 }
@@ -147,9 +149,15 @@ async function handler(request: Request): Promise<Response> {
     return await instance.handler(request);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : "";
     console.error("[Auth] Handler error:", err);
+    console.error("[Auth] Handler stack:", stack);
     return new Response(
-      JSON.stringify({ error: "Auth handler error", message: err }),
+      JSON.stringify({ 
+        error: "Auth handler error", 
+        message: err,
+        stack: stack ? stack.substring(0, 500) : undefined
+      }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
