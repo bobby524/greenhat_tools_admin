@@ -13,8 +13,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies with legacy peer deps for better-auth compatibility
+RUN npm ci --legacy-peer-deps
 
 # --------------------------------------------
 # Stage 2: Builder
