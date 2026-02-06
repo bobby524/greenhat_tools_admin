@@ -4,9 +4,12 @@ import { Pool } from "pg";
 
 // Get database URL
 function getDatabaseUrl(): string | null {
-  return process.env.POSTGRES_URL || 
+  const url = process.env.POSTGRES_URL || 
          process.env.DATABASE_URL || 
+         process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL || null;
+  console.log("[Auth] Database URL check:", url ? "Found" : "Not found", "Keys checked: POSTGRES_URL, DATABASE_URL, CRM_POSTGRES_URL, crm_POSTGRES_URL");
+  return url;
 }
 
 // Get database pool
@@ -14,7 +17,7 @@ function getDatabasePool() {
   const databaseUrl = getDatabaseUrl();
   if (!databaseUrl) return null;
   
-  const dbUrl = process.env.crm_POSTGRES_URL || databaseUrl;
+  const dbUrl = process.env.CRM_POSTGRES_URL || process.env.crm_POSTGRES_URL || databaseUrl;
   const isSupabase = dbUrl.includes('supabase.co');
   
   return new Pool({
