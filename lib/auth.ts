@@ -192,4 +192,4 @@ export const auth = {
 };
 
 // Admin client for dashboard  
-export { adminClient } from "better-auth/client/plugins";
+export { adminClient } from "better-auth/client";
