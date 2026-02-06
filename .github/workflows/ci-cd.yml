@@ -160,6 +160,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Set Vercel Environment Variables
+        run: |
+          echo "Setting Vercel environment variables..."
+          # Create .env.production file for Vercel
+          echo "BETTER_AUTH_SECRET=${{ secrets.BETTER_AUTH_SECRET }}" > .env.production
+          echo "BETTER_AUTH_URL=${{ secrets.BETTER_AUTH_URL }}" >> .env.production
+          echo "crm_POSTGRES_URL=${{ secrets.crm_POSTGRES_URL }}" >> .env.production
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env.production
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env.production
+          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env.production
+          
+          # Pull current env to get .vercel/project.json set up
+          vercel pull --yes --environment=production --token ${{ secrets.VERCEL_TOKEN }}
+          
+          # Push env vars to Vercel
+          vercel env pull .env.production --yes --environment=production --token ${{ secrets.VERCEL_TOKEN }} || true
+          
+          echo "Environment variables set"
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
         with:
@@ -167,13 +197,6 @@ jobs:
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-args: '--prod --debug'
-        env:
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          crm_POSTGRES_URL: ${{ secrets.crm_POSTGRES_URL }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
 
       - name: Post-deployment smoke test
         run: |
