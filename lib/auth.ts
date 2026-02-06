@@ -7,7 +7,6 @@ function getDatabaseUrl(): string | null {
          process.env.DATABASE_URL || 
          process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL || null;
-  console.log("[Auth] Database URL check:", url ? "Found" : "Not found");
   return url;
 }
 
@@ -25,9 +24,18 @@ export function getAuthConfig(): BetterAuthOptions | null {
     return null;
   }
   
-  console.log("[Auth] Creating config with database URL:", databaseUrl.substring(0, 30) + "...");
-  console.log("[Auth] BETTER_AUTH_SECRET:", process.env.BETTER_AUTH_SECRET ? "Set" : "Not set");
-  console.log("[Auth] GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "Set" : "Not set");
+  // Parse the URL to check if it's Supabase
+  const isSupabase = databaseUrl.includes('supabase.co') || databaseUrl.includes('pooler.supabase');
+  
+  // Build connection string with proper SSL settings for Supabase
+  let connectionString = databaseUrl;
+  if (isSupabase && !connectionString.includes('sslmode=')) {
+    connectionString += connectionString.includes('?') ? '&' : '?';
+    connectionString += 'sslmode=require';
+  }
+  
+  console.log("[Auth] Database URL configured:", connectionString.substring(0, 40) + "...");
+  console.log("[Auth] Is Supabase:", isSupabase);
   
   return {
     secret: process.env.BETTER_AUTH_SECRET,
@@ -35,7 +43,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
     trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
     database: {
       provider: "pg",
-      url: databaseUrl,
+      url: connectionString,
     },
     emailAndPassword: {
       enabled: true,
