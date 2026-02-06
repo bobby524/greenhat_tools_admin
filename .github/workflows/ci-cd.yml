@@ -184,6 +184,7 @@ jobs:
           add_env "BETTER_AUTH_SECRET" "${{ secrets.BETTER_AUTH_SECRET }}"
           add_env "BETTER_AUTH_URL" "${{ secrets.BETTER_AUTH_URL }}"
           add_env "crm_POSTGRES_URL" "${{ secrets.crm_POSTGRES_URL }}"
+          add_env "CRM_POSTGRES_URL_NON_POOLING" "${{ secrets.CRM_POSTGRES_URL_NON_POOLING }}"
           add_env "GOOGLE_CLIENT_ID" "${{ secrets.GOOGLE_CLIENT_ID }}"
           add_env "GOOGLE_CLIENT_SECRET" "${{ secrets.GOOGLE_CLIENT_SECRET }}"
           add_env "RESEND_API_KEY" "${{ secrets.RESEND_API_KEY }}"

@@ -1,12 +1,16 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
 
-// Get database URL
+// Get database URL - prefer non-pooling for Better Auth
 function getDatabaseUrl(): string | null {
-  const url = process.env.POSTGRES_URL || 
+  // Try non-pooling URL first (better for Better Auth)
+  const url = process.env.CRM_POSTGRES_URL_NON_POOLING ||
+         process.env.crm_POSTGRES_URL_NON_POOLING ||
+         process.env.POSTGRES_URL || 
          process.env.DATABASE_URL || 
          process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL || null;
+  console.log("[Auth] Selected DB URL type:", process.env.CRM_POSTGRES_URL_NON_POOLING ? "NON_POOLING" : "POOLING");
   return url;
 }
 
