@@ -1,13 +1,31 @@
-import { UserButton } from "@clerk/nextjs";
-import { currentUser } from "@clerk/nextjs/server";
+"use client";
 
-export default async function AdminLayout({
+import { useEffect, useState } from "react";
+import { authClient } from "@/lib/auth-client";
+
+export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const user = await currentUser();
-  
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    authClient.getSession().then(({ data }) => {
+      setUser(data?.user || null);
+      setLoading(false);
+    });
+  }, []);
+
+  const handleSignOut = async () => {
+    await authClient.signOut({ callbackURL: "/" });
+  };
+
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+
   return (
     <div>
       <nav style={{
@@ -29,12 +47,26 @@ export default async function AdminLayout({
           <a href="/admin/system" style={{ color: '#ccc', textDecoration: 'none' }}>System</a>
           <a href="/admin/audit" style={{ color: '#ccc', textDecoration: 'none' }}>Audit</a>
           <a href="/admin/firewall" style={{ color: '#ccc', textDecoration: 'none' }}>🛡️ Firewall</a>
+          <a href="/admin/users" style={{ color: '#ccc', textDecoration: 'none' }}>👤 User Access</a>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ color: '#ccc', fontSize: '14px' }}>
-            {user?.emailAddresses[0]?.emailAddress}
+            {user?.email}
           </span>
-          <UserButton afterSignOutUrl="/" />
+          <button 
+            onClick={handleSignOut}
+            style={{
+              background: '#dc2626',
+              color: 'white',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </nav>
       {children}
