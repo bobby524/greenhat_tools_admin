@@ -18,12 +18,12 @@ export default function AdminDashboard() {
   const handleSignIn = async () => {
     await authClient.signIn.social({
       provider: "google",
-      callbackURL: "/",
     });
   };
 
   const handleSignOut = async () => {
-    await authClient.signOut({ callbackURL: "/" });
+    await authClient.signOut();
+    window.location.href = "/";
   };
 
   if (isLoading) {

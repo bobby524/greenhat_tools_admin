@@ -19,7 +19,8 @@ export default function AdminLayout({
   }, []);
 
   const handleSignOut = async () => {
-    await authClient.signOut({ callbackURL: "/" });
+    await authClient.signOut();
+    window.location.href = "/";
   };
 
   if (loading) {

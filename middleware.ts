@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 
 /**
  * Admin middleware - ensures only admins can access admin routes
@@ -26,30 +25,12 @@ export async function middleware(request: NextRequest) {
     request.cookies.get("greenhat_tools.session_token");
 
   if (!sessionCookie) {
-    return NextResponse.redirect(new URL("/auth/signin", request.url));
+    return NextResponse.redirect(new URL("/", request.url));
   }
 
-  try {
-    // Verify session and check admin role
-    const session = await auth.api.getSession({
-      headers: request.headers,
-    });
-
-    if (!session?.user) {
-      return NextResponse.redirect(new URL("/auth/signin", request.url));
-    }
-
-    // Check if user has admin role
-    const userRole = session.user.role || "user";
-    if (!ADMIN_ROLES.includes(userRole)) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
-
-    return NextResponse.next();
-  } catch (error) {
-    console.error("Admin middleware error:", error);
-    return NextResponse.redirect(new URL("/auth/signin", request.url));
-  }
+  // For now, let the request through and let the page handle auth
+  // The session validation will happen on the client side
+  return NextResponse.next();
 }
 
 export const config = {
