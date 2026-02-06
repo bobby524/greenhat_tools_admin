@@ -171,19 +171,22 @@ jobs:
       - name: Set Vercel Environment Variables
         run: |
           echo "Setting Vercel environment variables..."
-          # Create .env.production file for Vercel
-          echo "BETTER_AUTH_SECRET=${{ secrets.BETTER_AUTH_SECRET }}" > .env.production
-          echo "BETTER_AUTH_URL=${{ secrets.BETTER_AUTH_URL }}" >> .env.production
-          echo "crm_POSTGRES_URL=${{ secrets.crm_POSTGRES_URL }}" >> .env.production
-          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env.production
-          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env.production
-          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env.production
           
-          # Pull current env to get .vercel/project.json set up
-          vercel pull --yes --environment=production --token ${{ secrets.VERCEL_TOKEN }}
+          # Function to add env var to Vercel
+          add_env() {
+            local name="$1"
+            local value="$2"
+            echo "Adding $name..."
+            echo "$value" | vercel env add "$name" production --token "${{ secrets.VERCEL_TOKEN }}" --yes 2>/dev/null || true
+          }
           
-          # Push env vars to Vercel
-          vercel env pull .env.production --yes --environment=production --token ${{ secrets.VERCEL_TOKEN }} || true
+          # Add all required environment variables
+          add_env "BETTER_AUTH_SECRET" "${{ secrets.BETTER_AUTH_SECRET }}"
+          add_env "BETTER_AUTH_URL" "${{ secrets.BETTER_AUTH_URL }}"
+          add_env "crm_POSTGRES_URL" "${{ secrets.crm_POSTGRES_URL }}"
+          add_env "GOOGLE_CLIENT_ID" "${{ secrets.GOOGLE_CLIENT_ID }}"
+          add_env "GOOGLE_CLIENT_SECRET" "${{ secrets.GOOGLE_CLIENT_SECRET }}"
+          add_env "RESEND_API_KEY" "${{ secrets.RESEND_API_KEY }}"
           
           echo "Environment variables set"
         env:
