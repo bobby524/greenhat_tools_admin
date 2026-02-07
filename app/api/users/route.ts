@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Pool } from "pg";
 
+// Workaround for SSL certificate issues in some environments
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
 // Use the same database connection logic as auth.ts
 function getDatabaseUrl(): string | null {
   return (
