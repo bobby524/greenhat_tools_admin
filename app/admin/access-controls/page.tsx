@@ -46,67 +46,139 @@ export default function AccessControlsModule() {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>(DEFAULT_ROLES);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showRoleModal, setShowRoleModal] = useState(false);
+  const [updatingRole, setUpdatingRole] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchUsers();
   }, []);
 
+  // Clear success message after 3 seconds
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
   async function fetchUsers() {
-    // Mock data - in production this would call your API
-    setUsers([
-      {
-        id: "09649c79-975a-4967-9299-440b2b0fadee",
-        email: "anthony@greenhatsec.com",
-        name: "Anthony",
-        image: null,
-        role: "admin",
-        emailVerified: true,
-        createdAt: "2026-01-15T10:00:00Z",
-        updatedAt: "2026-02-07T12:00:00Z",
-      },
-      {
-        id: "user-2",
-        email: "bobby@greenhatsec.com",
-        name: "Bobby",
-        image: null,
-        role: "admin",
-        emailVerified: true,
-        createdAt: "2026-01-20T14:30:00Z",
-        updatedAt: "2026-02-06T09:15:00Z",
-      },
-      {
-        id: "user-3",
-        email: "demo@greenhatsec.com",
-        name: "Demo User",
-        image: null,
-        role: "user",
-        emailVerified: false,
-        createdAt: "2026-02-01T08:00:00Z",
-        updatedAt: "2026-02-01T08:00:00Z",
-      },
-    ]);
-    setLoading(false);
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/users");
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to fetch users");
+      }
+      const data = await response.json();
+      setUsers(data.users || []);
+    } catch (err) {
+      console.error("[AccessControls] Error fetching users:", err);
+      setError(err instanceof Error ? err.message : "Failed to fetch users");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function updateUserRole(userId: string, newRole: string) {
-    // In production, this would call your API
-    setUsers(users.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
-    setShowRoleModal(false);
-    setSelectedUser(null);
+    setUpdatingRole(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, role: newRole }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to update role");
+      }
+
+      const data = await response.json();
+
+      // Update local state with the updated user
+      setUsers(users.map((u) => (u.id === userId ? data.user : u)));
+      setSuccessMessage(`Role updated successfully for ${selectedUser?.name || selectedUser?.email}`);
+      setShowRoleModal(false);
+      setSelectedUser(null);
+    } catch (err) {
+      console.error("[AccessControls] Error updating role:", err);
+      setError(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setUpdatingRole(false);
+    }
   }
 
   if (loading) {
     return (
       <AdminLayout title="Access Controls">
-        <div>Loading users...</div>
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "400px" }}>
+          <LoadingSpinner />
+          <span style={{ marginLeft: "12px", color: "#6b7280" }}>Loading users...</span>
+        </div>
       </AdminLayout>
     );
   }
 
   return (
     <AdminLayout title="Access Controls">
+      {/* Success Message */}
+      {successMessage && (
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "#dcfce7",
+            border: "1px solid #86efac",
+            borderRadius: "8px",
+            marginBottom: "20px",
+            color: "#166534",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <span>✓</span>
+          {successMessage}
+        </div>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "#fee2e2",
+            border: "1px solid #fca5a5",
+            borderRadius: "8px",
+            marginBottom: "20px",
+            color: "#991b1b",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "8px",
+          }}
+        >
+          <span>⚠ {error}</span>
+          <button
+            onClick={fetchUsers}
+            style={{
+              padding: "4px 12px",
+              background: "white",
+              border: "1px solid #fca5a5",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "0.875rem",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Stats Overview */}
       <div style={{ display: "grid", gap: "20px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: "30px" }}>
         <StatCard title="Total Users" value={users.length} color="#3b82f6" />
@@ -134,76 +206,83 @@ export default function AccessControlsModule() {
           </button>
         </div>
 
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ background: "#f9fafb", textAlign: "left" }}>
-              <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>User</th>
-              <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Role</th>
-              <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Status</th>
-              <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Joined</th>
-              <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.id}>
-                <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <div
+        {users.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px", color: "#6b7280" }}>
+            No users found.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#f9fafb", textAlign: "left" }}>
+                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>User</th>
+                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Role</th>
+                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Status</th>
+                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Joined</th>
+                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <div
+                        style={{
+                          width: "40px",
+                          height: "40px",
+                          borderRadius: "50%",
+                          background: "#e5e7eb",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "1.25rem",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {user.image ? (
+                          <img src={user.image} alt={user.name || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        ) : (
+                          "👤"
+                        )}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: "bold" }}>{user.name || "Unnamed User"}</div>
+                        <div style={{ fontSize: "0.875rem", color: "#6b7280" }}>{user.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
+                    <RoleBadge role={user.role} />
+                  </td>
+                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
+                    <StatusBadge verified={user.emailVerified} />
+                  </td>
+                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: "#6b7280", fontSize: "0.875rem" }}>
+                    {new Date(user.createdAt).toLocaleDateString()}
+                  </td>
+                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
+                    <button
+                      onClick={() => {
+                        setSelectedUser(user);
+                        setShowRoleModal(true);
+                      }}
                       style={{
-                        width: "40px",
-                        height: "40px",
-                        borderRadius: "50%",
-                        background: "#e5e7eb",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: "1.25rem",
+                        padding: "6px 12px",
+                        background: "#f3f4f6",
+                        border: "1px solid #d1d5db",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "0.875rem",
                       }}
                     >
-                      {user.image ? (
-                        <img src={user.image} alt={user.name || ""} style={{ width: "100%", height: "100%", borderRadius: "50%" }} />
-                      ) : (
-                        "👤"
-                      )}
-                    </div>
-                    <div>
-                      <div style={{ fontWeight: "bold" }}>{user.name || "Unnamed User"}</div>
-                      <div style={{ fontSize: "0.875rem", color: "#6b7280" }}>{user.email}</div>
-                    </div>
-                  </div>
-                </td>
-                <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                  <RoleBadge role={user.role} />
-                </td>
-                <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                  <StatusBadge verified={user.emailVerified} />
-                </td>
-                <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: "#6b7280", fontSize: "0.875rem" }}>
-                  {new Date(user.createdAt).toLocaleDateString()}
-                </td>
-                <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                  <button
-                    onClick={() => {
-                      setSelectedUser(user);
-                      setShowRoleModal(true);
-                    }}
-                    style={{
-                      padding: "6px 12px",
-                      background: "#f3f4f6",
-                      border: "1px solid #d1d5db",
-                      borderRadius: "4px",
-                      cursor: "pointer",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Edit Role
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                      Edit Role
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Roles Section */}
@@ -283,17 +362,19 @@ export default function AccessControlsModule() {
               {roles.map((role) => (
                 <button
                   key={role.id}
-                  onClick={() => updateUserRole(selectedUser.id, role.id)}
+                  onClick={() => !updatingRole && updateUserRole(selectedUser.id, role.id)}
+                  disabled={updatingRole}
                   style={{
                     padding: "12px 16px",
                     background: selectedUser.role === role.id ? "#eff6ff" : "white",
                     border: selectedUser.role === role.id ? "2px solid #3b82f6" : "1px solid #e5e7eb",
                     borderRadius: "8px",
-                    cursor: "pointer",
+                    cursor: updatingRole ? "not-allowed" : "pointer",
                     textAlign: "left",
                     display: "flex",
                     alignItems: "center",
                     gap: "10px",
+                    opacity: updatingRole ? 0.6 : 1,
                   }}
                 >
                   <RoleBadge role={role.id} />
@@ -301,6 +382,9 @@ export default function AccessControlsModule() {
                     <div style={{ fontWeight: "bold" }}>{role.name}</div>
                     <div style={{ fontSize: "0.875rem", color: "#6b7280" }}>{role.description}</div>
                   </div>
+                  {updatingRole && selectedUser.role !== role.id && (
+                    <LoadingSpinner size="small" style={{ marginLeft: "auto" }} />
+                  )}
                 </button>
               ))}
             </div>
@@ -310,12 +394,14 @@ export default function AccessControlsModule() {
                   setShowRoleModal(false);
                   setSelectedUser(null);
                 }}
+                disabled={updatingRole}
                 style={{
                   padding: "10px 20px",
                   background: "#f3f4f6",
                   border: "none",
                   borderRadius: "6px",
-                  cursor: "pointer",
+                  cursor: updatingRole ? "not-allowed" : "pointer",
+                  opacity: updatingRole ? 0.6 : 1,
                 }}
               >
                 Cancel
@@ -349,6 +435,23 @@ export default function AccessControlsModule() {
         </a>
       </div>
     </AdminLayout>
+  );
+}
+
+function LoadingSpinner({ size = "normal", style = {} }: { size?: "normal" | "small"; style?: React.CSSProperties }) {
+  const sizePx = size === "small" ? 16 : 24;
+  return (
+    <div
+      style={{
+        width: sizePx,
+        height: sizePx,
+        border: "3px solid #e5e7eb",
+        borderTop: "3px solid #3b82f6",
+        borderRadius: "50%",
+        animation: "spin 1s linear infinite",
+        ...style,
+      }}
+    />
   );
 }
 
