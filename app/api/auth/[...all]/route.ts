@@ -3,49 +3,26 @@ import { NextRequest, NextResponse } from "next/server";
 
 /**
  * Better Auth API route handler
+ * This catches all /api/auth/* routes and handles them with Better Auth
  */
-
 export async function GET(request: NextRequest) {
-  try {
-    return await auth.handler(request);
-  } catch (error) {
-    console.error("Auth GET error:", error);
-    return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
-  }
+  // Better Auth will handle the request
+  return auth.handler(request);
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    return await auth.handler(request);
-  } catch (error) {
-    console.error("Auth POST error:", error);
-    return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
-  }
+  // Better Auth will handle the request
+  return auth.handler(request);
 }
 
 export async function PUT(request: NextRequest) {
-  try {
-    return await auth.handler(request);
-  } catch (error) {
-    console.error("Auth PUT error:", error);
-    return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
-  }
+  return auth.handler(request);
 }
 
 export async function DELETE(request: NextRequest) {
-  try {
-    return await auth.handler(request);
-  } catch (error) {
-    console.error("Auth DELETE error:", error);
-    return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
-  }
+  return auth.handler(request);
 }
 
 export async function PATCH(request: NextRequest) {
-  try {
-    return await auth.handler(request);
-  } catch (error) {
-    console.error("Auth PATCH error:", error);
-    return NextResponse.json({ error: "Auth service unavailable" }, { status: 503 });
-  }
+  return auth.handler(request);
 }
