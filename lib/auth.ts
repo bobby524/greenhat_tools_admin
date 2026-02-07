@@ -16,7 +16,7 @@ function getAuthInstance() {
          process.env.crm_POSTGRES_URL;
 
   if (!databaseUrl) {
-    initError = "Database URL not configured. Checked: CRM_POSTGRES_URL_NON_POOLING, crm_POSTGRES_URL_NON_POOLING, POSTGRES_URL, DATABASE_URL, CRM_POSTGRES_URL, crm_POSTGRES_URL";
+    initError = "Database URL not configured";
     console.error("[Auth]", initError);
     return null;
   }
@@ -28,7 +28,7 @@ function getAuthInstance() {
   }
 
   try {
-    console.log("[Auth] Initializing with database...");
+    console.log("[Auth] Initializing...");
     
     // Add sslmode for Supabase
     let url = databaseUrl;
@@ -41,7 +41,11 @@ function getAuthInstance() {
       secret: process.env.BETTER_AUTH_SECRET,
       baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
       trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-      database: url,  // String URL - Better Auth creates its own adapter
+      // Use object format with provider
+      database: {
+        provider: "postgres",
+        url: url,
+      },
       emailAndPassword: {
         enabled: true,
         minPasswordLength: 8,
@@ -68,27 +72,22 @@ function getAuthInstance() {
       },
     });
     
-    console.log("[Auth] Initialized successfully");
+    console.log("[Auth] Initialized");
     return authInstance;
   } catch (error) {
     initError = error instanceof Error ? error.message : String(error);
-    console.error("[Auth] Failed to initialize:", initError);
+    console.error("[Auth] Failed:", initError);
     return null;
   }
 }
 
 // Handler
 async function handler(request: Request): Promise<Response> {
-  console.log("[Auth] Handler called:", request.method, request.url);
-  
   const instance = getAuthInstance();
   
   if (!instance) {
     return new Response(
-      JSON.stringify({ 
-        error: "Auth not configured", 
-        details: initError 
-      }), 
+      JSON.stringify({ error: "Auth not configured", details: initError }), 
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -97,7 +96,6 @@ async function handler(request: Request): Promise<Response> {
     return await instance.handler(request);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    console.error("[Auth] Handler error:", err);
     return new Response(
       JSON.stringify({ error: "Auth error", message: err }),
       { status: 500, headers: { "Content-Type": "application/json" } }
