@@ -9,7 +9,8 @@ function getDatabaseUrl(): string | null {
          process.env.POSTGRES_URL || 
          process.env.DATABASE_URL || 
          process.env.CRM_POSTGRES_URL ||
-         process.env.crm_POSTGRES_URL;
+         process.env.crm_POSTGRES_URL ||
+         null;
   return url;
 }
 
