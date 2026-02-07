@@ -13,13 +13,17 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.91.0",
+    "better-auth": "^1.4.18",
     "lucide-react": "^0.460.0",
     "next": "^14.0.0",
+    "pg": "^8.18.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "resend": "^6.9.1"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.16.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "typescript": "^5",
