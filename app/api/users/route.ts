@@ -9,11 +9,12 @@ export async function GET(request: NextRequest) {
   try {
     const supabase = getSupabase();
 
-    // Fetch users from the users table (Better Auth default schema)
+    // Fetch users from the user table (Better Auth default schema)
+    // Note: Using raw query to avoid schema cache issues
     const { data: users, error } = await supabase
-      .from("user")
-      .select("id, email, name, image, emailVerified, role, createdAt, updatedAt")
-      .order("createdAt", { ascending: false });
+      .from('user')
+      .select('id, email, name, image, "emailVerified", role, "createdAt", "updatedAt"')
+      .order('createdAt', { ascending: false });
 
     if (error) {
       console.error("[API Users] Error fetching users:", error);
@@ -75,10 +76,10 @@ export async function PATCH(request: NextRequest) {
 
     // Update the user's role
     const { data, error } = await supabase
-      .from("user")
+      .from('user')
       .update({ role, updatedAt: new Date().toISOString() })
-      .eq("id", userId)
-      .select("id, email, name, image, emailVerified, role, createdAt, updatedAt")
+      .eq('id', userId)
+      .select('id, email, name, image, "emailVerified", role, "createdAt", "updatedAt"')
       .single();
 
     if (error) {
