@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
 
-// Get database URL with SSL for Supabase
+// Get database URL
 function getDatabaseUrl(): string | null {
   let url = process.env.CRM_POSTGRES_URL_NON_POOLING ||
          process.env.crm_POSTGRES_URL_NON_POOLING ||
@@ -41,13 +41,12 @@ function getAuthInstance() {
   }
 
   try {
-    console.log("[Auth] Initializing with database URL...");
+    console.log("[Auth] Initializing with existing schema...");
     
     authInstance = betterAuth({
       secret: process.env.BETTER_AUTH_SECRET,
       baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
       trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-      // For serverless, use the built-in Kysely adapter with connection string
       database: databaseUrl,
       emailAndPassword: {
         enabled: true,
@@ -71,6 +70,11 @@ function getAuthInstance() {
         crossSubDomainCookies: {
           enabled: true,
           domain: ".greenhatsec.com",
+        },
+        // Don't auto-create tables - they already exist
+        database: {
+          type: "postgres",
+          url: databaseUrl,
         },
       },
     });
