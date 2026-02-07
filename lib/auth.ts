@@ -1,50 +1,35 @@
 import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
-import { Pool } from "pg";
 
-// Get database URL
+// Get database URL with SSL for Supabase
 function getDatabaseUrl(): string | null {
-  const url = process.env.CRM_POSTGRES_URL_NON_POOLING ||
+  let url = process.env.CRM_POSTGRES_URL_NON_POOLING ||
          process.env.crm_POSTGRES_URL_NON_POOLING ||
          process.env.POSTGRES_URL || 
          process.env.DATABASE_URL || 
          process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL ||
          null;
-  return url;
-}
-
-// Create database pool
-function createPool() {
-  const databaseUrl = getDatabaseUrl();
-  if (!databaseUrl) return null;
-
-  console.log("[Auth] Creating database pool...");
   
-  return new Pool({
-    connectionString: databaseUrl,
-    ssl: { rejectUnauthorized: false },
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-  });
+  if (url && url.includes('supabase') && !url.includes('sslmode=')) {
+    url += url.includes('?') ? '&' : '?';
+    url += 'sslmode=require';
+  }
+  
+  return url;
 }
 
 // Lazy initialization
 let authInstance: ReturnType<typeof betterAuth> | null = null;
 let initError: string | null = null;
-let initAttempts = 0;
 
 function getAuthInstance() {
   if (authInstance) return authInstance;
   
-  initAttempts++;
-  console.log(`[Auth] Initialization attempt ${initAttempts}`);
-  
-  const pool = createPool();
+  const databaseUrl = getDatabaseUrl();
 
-  if (!pool) {
-    initError = "Database not configured";
+  if (!databaseUrl) {
+    initError = "Database URL not configured";
     console.error("[Auth]", initError);
     return null;
   }
@@ -56,15 +41,14 @@ function getAuthInstance() {
   }
 
   try {
-    console.log("[Auth] Creating Better Auth with Pool...");
-    console.log("[Auth] BETTER_AUTH_SECRET:", process.env.BETTER_AUTH_SECRET ? "Set" : "Not set");
-    console.log("[Auth] GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "Set" : "Not set");
+    console.log("[Auth] Initializing with database URL...");
     
     authInstance = betterAuth({
       secret: process.env.BETTER_AUTH_SECRET,
       baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
       trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-      database: pool,  // Pass Pool directly - this is the correct way!
+      // For serverless, use the built-in Kysely adapter with connection string
+      database: databaseUrl,
       emailAndPassword: {
         enabled: true,
         minPasswordLength: 8,
@@ -91,52 +75,33 @@ function getAuthInstance() {
       },
     });
     
-    console.log("[Auth] Better Auth initialized successfully");
+    console.log("[Auth] Initialized successfully");
     return authInstance;
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : "";
     initError = err;
-    console.error("[Auth] Failed to initialize:", err);
-    console.error("[Auth] Stack:", stack);
+    console.error("[Auth] Failed:", err);
     return null;
   }
 }
 
 // Handler
 async function handler(request: Request): Promise<Response> {
-  console.log("[Auth] Handler called:", request.method, request.url);
-  
   const instance = getAuthInstance();
   
   if (!instance) {
-    console.error("[Auth] Auth instance not available. Init error:", initError);
     return new Response(
-      JSON.stringify({ 
-        error: "Auth not configured", 
-        details: initError,
-        initAttempts
-      }), 
+      JSON.stringify({ error: "Auth not configured", details: initError }), 
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
 
   try {
-    console.log("[Auth] Calling Better Auth handler...");
-    const response = await instance.handler(request);
-    console.log("[Auth] Better Auth response:", response.status);
-    return response;
+    return await instance.handler(request);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : "";
-    console.error("[Auth] Handler error:", err);
-    console.error("[Auth] Handler stack:", stack);
     return new Response(
-      JSON.stringify({ 
-        error: "Auth handler error", 
-        message: err,
-        stack: stack?.substring(0, 500)
-      }),
+      JSON.stringify({ error: "Auth error", message: err }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
