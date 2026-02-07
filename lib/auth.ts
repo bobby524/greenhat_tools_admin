@@ -1,5 +1,6 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
+import { Kysely, PostgresDialect } from "kysely";
 import { Pool } from "pg";
 
 // SSL workaround for Supabase
@@ -17,28 +18,32 @@ function getDatabaseUrl(): string | null {
          process.env.crm_POSTGRES_URL || null;
 }
 
-// Get database pool
-function getDatabasePool() {
+// Create Kysely database instance
+function createDatabase() {
   const databaseUrl = getDatabaseUrl();
   if (!databaseUrl) return null;
   
   const isSupabase = databaseUrl.includes('supabase.co') || databaseUrl.includes('pooler.supabase');
   
-  return new Pool({
+  const pool = new Pool({
     connectionString: databaseUrl,
     ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });
+
+  return new Kysely<unknown>({
+    dialect: new PostgresDialect({ pool }),
+  });
 }
 
 // Export auth config
 export function getAuthConfig(): BetterAuthOptions | null {
   const databaseUrl = getDatabaseUrl();
-  const pool = getDatabasePool();
+  const db = createDatabase();
   
-  if (!databaseUrl || !pool) {
+  if (!databaseUrl || !db) {
     console.error("[Auth] Database not configured");
     return null;
   }
@@ -52,7 +57,11 @@ export function getAuthConfig(): BetterAuthOptions | null {
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
     trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-    database: pool,
+    // Use Kysely database adapter - Better Auth expects { db, type: "postgres" }
+    database: {
+      db,
+      type: "postgres",
+    },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
