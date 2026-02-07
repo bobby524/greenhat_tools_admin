@@ -1,46 +1,95 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabase, User } from "@/lib/supabase-server";
+import { Pool } from "pg";
+
+// Use the same database connection logic as auth.ts
+function getDatabaseUrl(): string | null {
+  return (
+    process.env.crm_POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL ||
+    process.env.CRM_POSTGRES_URL ||
+    null
+  );
+}
+
+function getPool() {
+  const databaseUrl = getDatabaseUrl();
+  if (!databaseUrl) return null;
+
+  const isSupabase = databaseUrl.includes("supabase.co");
+
+  return new Pool({
+    connectionString: databaseUrl,
+    ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string | null;
+  image: string | null;
+  emailVerified: boolean;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /**
  * GET /api/users
  * Fetch all users from the database
  */
 export async function GET(request: NextRequest) {
-  try {
-    const supabase = getSupabase();
-
-    // Fetch users from the user table (Better Auth default schema)
-    // Note: Using raw query to avoid schema cache issues
-    const { data: users, error } = await supabase
-      .from('user')
-      .select('id, email, name, image, "emailVerified", role, "createdAt", "updatedAt"')
-      .order('createdAt', { ascending: false });
-
-    if (error) {
-      console.error("[API Users] Error fetching users:", error);
-      return NextResponse.json(
-        { error: "Failed to fetch users", details: error.message },
-        { status: 500 }
-      );
-    }
-
-    // Transform data to match our User interface
-    const transformedUsers: User[] = (users || []).map((user: any) => ({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      image: user.image,
-      emailVerified: user.emailVerified || false,
-      role: user.role || "user",
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    }));
-
-    return NextResponse.json({ users: transformedUsers });
-  } catch (error) {
-    console.error("[API Users] Unexpected error:", error);
+  const pool = getPool();
+  
+  if (!pool) {
     return NextResponse.json(
-      { error: "Internal server error", details: error instanceof Error ? error.message : "Unknown error" },
+      { error: "Database not configured" },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const client = await pool.connect();
+    
+    try {
+      // Query the user table directly
+      const result = await client.query(`
+        SELECT 
+          id, 
+          email, 
+          name, 
+          image, 
+          "emailVerified", 
+          COALESCE(role, 'user') as role, 
+          "createdAt", 
+          "updatedAt"
+        FROM "user"
+        ORDER BY "createdAt" DESC
+      `);
+
+      const users: User[] = result.rows.map((row) => ({
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        image: row.image,
+        emailVerified: row.emailVerified || false,
+        role: row.role || "user",
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }));
+
+      return NextResponse.json({ users });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("[API Users] Error fetching users:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch users", details: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
     );
   }
@@ -52,6 +101,15 @@ export async function GET(request: NextRequest) {
  * Body: { userId: string, role: string }
  */
 export async function PATCH(request: NextRequest) {
+  const pool = getPool();
+  
+  if (!pool) {
+    return NextResponse.json(
+      { error: "Database not configured" },
+      { status: 500 }
+    );
+  }
+
   try {
     const body = await request.json();
     const { userId, role } = body;
@@ -72,48 +130,54 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabase();
-
-    // Update the user's role
-    const { data, error } = await supabase
-      .from('user')
-      .update({ role, updatedAt: new Date().toISOString() })
-      .eq('id', userId)
-      .select('id, email, name, image, "emailVerified", role, "createdAt", "updatedAt"')
-      .single();
-
-    if (error) {
-      console.error("[API Users] Error updating user role:", error);
-      return NextResponse.json(
-        { error: "Failed to update user role", details: error.message },
-        { status: 500 }
+    const client = await pool.connect();
+    
+    try {
+      // Update the user's role
+      const result = await client.query(
+        `
+        UPDATE "user"
+        SET role = $1, "updatedAt" = NOW()
+        WHERE id = $2
+        RETURNING 
+          id, 
+          email, 
+          name, 
+          image, 
+          "emailVerified", 
+          COALESCE(role, 'user') as role, 
+          "createdAt", 
+          "updatedAt"
+        `,
+        [role, userId]
       );
+
+      if (result.rowCount === 0) {
+        return NextResponse.json(
+          { error: "User not found" },
+          { status: 404 }
+        );
+      }
+
+      const user: User = {
+        id: result.rows[0].id,
+        email: result.rows[0].email,
+        name: result.rows[0].name,
+        image: result.rows[0].image,
+        emailVerified: result.rows[0].emailVerified || false,
+        role: result.rows[0].role || "user",
+        createdAt: result.rows[0].createdAt,
+        updatedAt: result.rows[0].updatedAt,
+      };
+
+      return NextResponse.json({ user, success: true });
+    } finally {
+      client.release();
     }
-
-    if (!data) {
-      return NextResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      );
-    }
-
-    // Transform the response
-    const updatedUser: User = {
-      id: data.id,
-      email: data.email,
-      name: data.name,
-      image: data.image,
-      emailVerified: data.emailVerified || false,
-      role: data.role || "user",
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-    };
-
-    return NextResponse.json({ user: updatedUser, success: true });
   } catch (error) {
-    console.error("[API Users] Unexpected error:", error);
+    console.error("[API Users] Error updating user:", error);
     return NextResponse.json(
-      { error: "Internal server error", details: error instanceof Error ? error.message : "Unknown error" },
+      { error: "Failed to update user", details: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
     );
   }
