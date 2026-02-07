@@ -68,31 +68,31 @@ export function getAuthConfig(): BetterAuthOptions | null {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
-      sendResetEmail: async ({ user, url }) => {
+      sendResetPassword: async (data) => {
         const resend = getResend();
         await resend.emails.send({
           from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: user.email,
+          to: data.user.email,
           subject: 'Reset your password',
           html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #62ac4a;">Reset Your Password</h2>
-            <p>Hello ${user.name || user.email},</p>
-            <p>Click to reset: <a href="${url}">${url}</a></p>
+            <p>Hello ${data.user.name || data.user.email},</p>
+            <p>Click to reset: <a href="${data.url}">${data.url}</a></p>
             <p>Expires in 1 hour.</p>
           </div>`,
         });
       },
     },
     emailVerification: {
-      sendVerificationEmail: async ({ user, url }) => {
+      sendVerificationEmail: async (data) => {
         const resend = getResend();
         await resend.emails.send({
           from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: user.email,
+          to: data.user.email,
           subject: 'Verify your email',
           html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #62ac4a;">Verify Your Email</h2>
-            <p>Welcome! Click to verify: <a href="${url}">${url}</a></p>
+            <p>Welcome! Click to verify: <a href="${data.url}">${data.url}</a></p>
             <p>Expires in 24 hours.</p>
           </div>`,
         });
@@ -113,7 +113,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
       admin({
         adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
         defaultRole: "user",
-        roles: ["user", "member", "admin", "owner"],
+        adminRoles: ["admin", "owner"],
       }),
     ],
     session: { expiresIn: 60 * 60 * 24 * 7 },
