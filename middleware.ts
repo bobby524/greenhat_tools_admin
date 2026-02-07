@@ -19,10 +19,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check for session cookie
-  const sessionCookie = 
-    request.cookies.get("__Secure-greenhat_tools.session_token") ||
-    request.cookies.get("greenhat_tools.session_token");
+  // Check for session cookie - handle secure and non-secure variants
+  const possibleCookieNames = [
+    "__Secure-greenhat_tools.session_token",
+    "greenhat_tools.session_token",
+    "greenhat_tools.session",
+    "session_token",
+  ];
+
+  let sessionCookie = null;
+  for (const name of possibleCookieNames) {
+    const cookie = request.cookies.get(name);
+    if (cookie?.value) {
+      sessionCookie = cookie;
+      break;
+    }
+  }
 
   if (!sessionCookie) {
     return NextResponse.redirect(new URL("/", request.url));

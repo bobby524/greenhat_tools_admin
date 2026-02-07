@@ -48,166 +48,90 @@ Deploy Greenhat Tools Admin to Vercel with one-click deployment and zero configu
 
 ## Deployment Options
 
-### Option A: One-Click Deploy with Doppler (Recommended)
+### Option A: One-Click Deploy (Recommended)
 
-⚠️ **Note:** This button deploys to Vercel, but you'll configure secrets in Doppler (not Vercel).
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin&env=DOPPLER_TOKEN&project-name=greenhat-admin&repository-name=greenhat-admin)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbobby524%2Fgreenhat_tools_admin)
 
 **Steps:**
 1. **Click the Deploy button** above
 2. **Connect GitHub** and create project
-3. **Set only `DOPPLER_TOKEN`** in Vercel (get from Doppler dashboard)
-4. **Configure Doppler** (see Secrets Management section below)
-5. **Deploy** - All other secrets come from Doppler!
+3. **Set environment variables** in Vercel (see below)
+4. **Deploy**
 
-### Option B: Manual Deploy with Doppler
+### Option B: Manual Deploy
 
 ```bash
 # 1. Clone repo
 git clone https://github.com/bobby524/greenhat_tools_admin.git
 cd greenhat_tools_admin
 
-# 2. Setup Doppler (see Secrets Management below)
-doppler login
-doppler setup --project greenhat-admin --config prd
-
-# 3. Get Doppler token for Vercel
-doppler configs tokens create vercel-token --project greenhat-admin --config prd
-# Save this token!
-
-# 4. Deploy to Vercel
+# 2. Deploy to Vercel
 npm i -g vercel
 vercel login
 vercel --prod
 
-# 5. Set ONLY DOPPLER_TOKEN in Vercel
-vercel env add DOPPLER_TOKEN
-# Enter the token from step 3
+# 3. Set environment variables in Vercel Dashboard
 ```
 
-### Option C: GitHub Integration + Doppler
+### Option C: GitHub Integration
 
 1. Fork/clone: https://github.com/bobby524/greenhat_tools_admin
 2. Go to https://vercel.com/dashboard → Add New Project
 3. Import your GitHub repo
-4. **Set only `DOPPLER_TOKEN`** in environment variables
-5. **Connect Doppler integration** (see below)
-6. Deploy
+4. **Set environment variables** (see below)
+5. Deploy
 
-## Secrets Management with Doppler (Recommended)
+## Secrets Management
 
-**Don't store secrets in Vercel!** Use Doppler for secure secrets management.
+Set secrets directly in **Vercel Dashboard** → Settings → Environment Variables
 
-### Why Doppler?
-- ✅ Centralized secrets across all environments
-- ✅ Automatic rotation
-- ✅ Access logging
-- ✅ Team permissions
-- ✅ Version history
-- ✅ Syncs to Vercel at build time
-
-### Setup Doppler + Vercel
-
-#### 1. Create Doppler Project
-
-```bash
-# Install Doppler CLI
-brew install dopplerhq/cli/doppler
-
-# Login
-doppler login
-
-# Create project for admin
-doppler projects create greenhat-admin
-
-# Create environments
-doppler environments create prd --project greenhat-admin
-```
-
-#### 2. Add Secrets to Doppler
-
-```bash
-# Set secrets in Doppler (not in Vercel!)
-doppler secrets set SUPABASE_URL "https://your-project.supabase.co" --project greenhat-admin --config prd
-doppler secrets set SUPABASE_SERVICE_ROLE_KEY "your-service-role-key" --project greenhat-admin --config prd
-doppler secrets set ADMIN_MCP_TOKEN "$(openssl rand -hex 32)" --project greenhat-admin --config prd
-doppler secrets set ADMIN_USERNAME "admin" --project greenhat-admin --config prd
-doppler secrets set ADMIN_PASSWORD "your-secure-password" --project greenhat-admin --config prd
-
-# Verify
-doppler secrets --project greenhat-admin --config prd
-```
-
-#### 3. Connect Doppler to Vercel
-
-**Option A: Doppler Vercel Integration (Easiest)**
-
-1. Go to [Doppler Dashboard](https://dashboard.doppler.com)
-2. Select your project → Integrations
-3. Click "Add Integration" → Select "Vercel"
-4. Connect your Vercel account
-5. Choose which Vercel project to sync
-6. Map Doppler config to Vercel environment
-7. Secrets auto-sync on every deploy!
-
-**Option B: Doppler CLI in Build (More Control)**
-
-Update `vercel.json`:
-```json
-{
-  "buildCommand": "doppler run -- npm run build",
-  "installCommand": "npm install && curl -Ls --tlsv1.2 --proto \"=https\" --retry 3 https://cli.doppler.com/install.sh | sh"
-}
-```
-
-Add Doppler token to Vercel:
-```bash
-# Get Doppler service token
-doppler configs tokens create vercel-token --project greenhat-admin --config prd
-
-# Add to Vercel (only this one secret!)
-vercel env add DOPPLER_TOKEN
-```
-
-#### 4. Update Build Scripts
-
-```json
-// package.json
-{
-  "scripts": {
-    "build": "next build",
-    "vercel-build": "doppler run -- npm run build"
-  }
-}
-```
-
-### Required Secrets in Doppler
+### Required Environment Variables
 
 | Secret | Description |
 |----------|-------------|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (NOT anon key!) |
 | `ADMIN_MCP_TOKEN` | Random secret token for MCP auth |
-| `ADMIN_USERNAME` | Admin login username |
-| `ADMIN_PASSWORD` | Admin login password |
+| `BETTER_AUTH_SECRET` | Secret for auth sessions (`openssl rand -base64 32`) |
+| `BETTER_AUTH_URL` | Your admin URL (e.g., `https://admin.greenhatsec.com`) |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GOOGLE_ALLOWED_DOMAIN` | Allowed Google domain (e.g., `greenhatsec.com`) |
 
-### Local Development with Doppler
+### Optional Environment Variables
+
+| Secret | Description |
+|----------|-------------|
+| `ALLOWED_IPS` | Comma-separated list of allowed IPs |
+| `NEXT_PUBLIC_API_URL` | API URL for frontend |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase URL for frontend |
+
+### Local Development
+
+Create a `.env.local` file:
 
 ```bash
-# Clone repo
-git clone https://github.com/bobby524/greenhat_tools_admin.git
-cd greenhat_tools_admin
+# Supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
-# Install dependencies
+# Auth
+BETTER_AUTH_SECRET=your-secret
+BETTER_AUTH_URL=http://localhost:4000
+
+# Google OAuth
+GOOGLE_CLIENT_ID=your-client-id
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_ALLOWED_DOMAIN=greenhatsec.com
+
+# MCP
+ADMIN_MCP_TOKEN=random-token
+```
+
+Then run:
+```bash
 npm install
-
-# Run with Doppler secrets
-doppler run -- npm run dev
-
-# Or configure once
-doppler setup --project greenhat-admin --config prd
-npm run dev  # Doppler auto-injects secrets
+npm run dev
 ```
 
 ## Security Configuration
@@ -240,41 +164,7 @@ export const config = {
 
 Set `ALLOWED_IPS` env var with your office IP(s).
 
-### 2. Password Protection
-
-Simple auth with NextAuth.js or basic password:
-
-```typescript
-// app/api/auth/[...nextauth]/route.ts
-import NextAuth from 'next-auth'
-import CredentialsProvider from 'next-auth/providers/credentials'
-
-const handler = NextAuth({
-  providers: [
-    CredentialsProvider({
-      name: 'Admin',
-      credentials: {
-        username: { label: "Username", type: "text" },
-        password: { label: "Password", type: "password" }
-      },
-      async authorize(credentials) {
-        if (credentials?.username === process.env.ADMIN_USERNAME &&
-            await verifyPassword(credentials.password, process.env.ADMIN_PASSWORD_HASH)) {
-          return { id: '1', name: 'Admin', email: 'admin@greenhatsec.com' }
-        }
-        return null
-      }
-    })
-  ],
-  pages: {
-    signIn: '/login',
-  }
-})
-
-export { handler as GET, handler as POST }
-```
-
-### 3. Vercel Authentication
+### 2. Vercel Authentication
 
 Enable Vercel's built-in protection:
 
@@ -392,14 +282,14 @@ Or in dashboard: Settings → Deployment Protection → Password Protection
 - [ ] Fork/clone the repo
 - [ ] Update `vercel.json` with your config
 - [ ] Add MCP edge function
-- [ ] Set up Upstash Redis (optional, for rate limiting)
+- [ ] Add Upstash Redis (optional, for rate limiting)
 - [ ] Generate `ADMIN_MCP_TOKEN` (random 64-char string)
-- [ ] Generate `NEXTAUTH_SECRET` (`openssl rand -base64 32`)
+- [ ] Generate `BETTER_AUTH_SECRET` (`openssl rand -base64 32`)
 
 ### Deployment
 - [ ] Click "Deploy to Vercel" button OR
 - [ ] Run `vercel --prod`
-- [ ] Set all environment variables
+- [ ] Set all environment variables in Vercel
 - [ ] Wait for build to complete
 
 ### Post-Deployment
@@ -474,6 +364,7 @@ npm run build
 ### Environment Variables Not Working
 - Check Vercel Dashboard → Settings → Environment Variables
 - Redeploy after adding variables
+- Ensure variables are set for the correct environment (Production/Preview)
 
 ### MCP Tools Not Responding
 - Check `/api/mcp` endpoint in browser
