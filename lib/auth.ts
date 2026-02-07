@@ -40,7 +40,7 @@ export const auth = betterAuth({
     enabled: true,
     minPasswordLength: 8,
     
-    sendResetEmail: async ({ user, url }) => {
+    sendResetEmail: async ({ user, url }: { user: any; url: string }) => {
       const resend = getResend();
       await resend.emails.send({
         from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
@@ -57,7 +57,7 @@ export const auth = betterAuth({
   },
 
   emailVerification: {
-    sendVerificationEmail: async ({ user, url }) => {
+    sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
       const resend = getResend();
       await resend.emails.send({
         from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
@@ -92,8 +92,6 @@ export const auth = betterAuth({
   plugins: [
     admin({
       adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
-      defaultRole: "user",
-      roles: ["user", "member", "admin", "owner"],
     }),
   ],
 
