@@ -7,9 +7,15 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 }
 
-// Get database URL
+// Get database URL - check multiple possible env var names
 function getDatabaseUrl(): string | null {
-  return process.env.crm_POSTGRES_URL_NON_POOLING || null;
+  return (
+    process.env.crm_POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL ||
+    process.env.CRM_POSTGRES_URL ||
+    null
+  );
 }
 
 // Get database pool
