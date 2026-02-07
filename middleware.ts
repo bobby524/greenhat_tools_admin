@@ -9,11 +9,11 @@ const ADMIN_ROLES = ["admin", "owner"];
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public routes
+  // Allow public routes and all API routes
   if (pathname === "/" || 
       pathname === "/auth/signin" || 
       pathname === "/auth/signup" ||
-      pathname.startsWith("/api/auth/") ||
+      pathname.startsWith("/api/") ||
       pathname.startsWith("/_next/") ||
       pathname.startsWith("/favicon.ico")) {
     return NextResponse.next();
