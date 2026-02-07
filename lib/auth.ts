@@ -108,11 +108,11 @@ export function getAuthConfig(): BetterAuthOptions | null {
       },
     },
     plugins: [
-      // admin({
-      //   adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
-      //   defaultRole: "user",
-      //   roles: ["user", "member", "admin", "owner"],
-      // }),
+      admin({
+        adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
+        defaultRole: "user",
+        roles: ["user", "member", "admin", "owner"] as const,
+      }),
     ],
     session: { expiresIn: 60 * 60 * 24 * 7 },
     advanced: {
