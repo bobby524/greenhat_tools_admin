@@ -63,7 +63,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
   return {
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
-    trustedOrigins: ["https://admin.greenhatsec.com"],
+    trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
     database: pool,
     emailAndPassword: {
       enabled: true,
@@ -113,7 +113,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
       admin({
         adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
         defaultRole: "user",
-        adminRoles: ["admin", "owner"],
+        roles: ["user", "member", "admin", "owner"],
       }),
     ],
     session: { expiresIn: 60 * 60 * 24 * 7 },
