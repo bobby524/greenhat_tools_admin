@@ -23,9 +23,14 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
     try {
       const { data } = await authClient.getSession();
       setSession(data);
-      // Check if user is admin (Better Auth stores role in user object or check by ID)
+      // Check if user is admin (Better Auth stores role in user object or check by ID/email)
       const userRole = (data?.user as any)?.role;
-      setIsAdmin(userRole === "admin" || data?.user?.id === "09649c79-975a-4967-9299-440b2b0fadee");
+      const userEmail = data?.user?.email;
+      setIsAdmin(
+        userRole === "admin" || 
+        data?.user?.id === "09649c79-975a-4967-9299-440b2b0fadee" ||
+        userEmail === "anthony@greenhatsec.com"
+      );
     } catch (e) {
       console.log("No session");
     }
