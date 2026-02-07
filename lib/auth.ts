@@ -19,11 +19,8 @@ function getResend(): Resend {
 
 // Get database URL
 function getDatabaseUrl(): string | null {
-  return process.env.CRM_POSTGRES_URL_NON_POOLING || 
-         process.env.crm_POSTGRES_URL_NON_POOLING ||
-         process.env.POSTGRES_URL || 
+  return process.env.POSTGRES_URL || 
          process.env.DATABASE_URL || 
-         process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL || null;
 }
 
@@ -32,10 +29,11 @@ function getDatabasePool() {
   const databaseUrl = getDatabaseUrl();
   if (!databaseUrl) return null;
   
-  const isSupabase = databaseUrl.includes('supabase.co');
+  const dbUrl = process.env.crm_POSTGRES_URL || databaseUrl;
+  const isSupabase = dbUrl.includes('supabase.co');
   
   return new Pool({
-    connectionString: databaseUrl,
+    connectionString: dbUrl,
     ssl: isSupabase 
       ? { rejectUnauthorized: false }
       : undefined,
@@ -68,31 +66,31 @@ export function getAuthConfig(): BetterAuthOptions | null {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
-      sendResetPassword: async (data) => {
+      sendResetEmail: async ({ user, url }) => {
         const resend = getResend();
         await resend.emails.send({
           from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: data.user.email,
+          to: user.email,
           subject: 'Reset your password',
           html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #62ac4a;">Reset Your Password</h2>
-            <p>Hello ${data.user.name || data.user.email},</p>
-            <p>Click to reset: <a href="${data.url}">${data.url}</a></p>
+            <p>Hello ${user.name || user.email},</p>
+            <p>Click to reset: <a href="${url}">${url}</a></p>
             <p>Expires in 1 hour.</p>
           </div>`,
         });
       },
     },
     emailVerification: {
-      sendVerificationEmail: async (data) => {
+      sendVerificationEmail: async ({ user, url }) => {
         const resend = getResend();
         await resend.emails.send({
           from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: data.user.email,
+          to: user.email,
           subject: 'Verify your email',
           html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #62ac4a;">Verify Your Email</h2>
-            <p>Welcome! Click to verify: <a href="${data.url}">${data.url}</a></p>
+            <p>Welcome! Click to verify: <a href="${url}">${url}</a></p>
             <p>Expires in 24 hours.</p>
           </div>`,
         });
