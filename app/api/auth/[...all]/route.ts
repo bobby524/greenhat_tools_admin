@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 /**
  * Better Auth API route handler
- * Simplified version for gradual migration
  */
 
 export async function GET(request: NextRequest) {

@@ -1,6 +1,12 @@
-import { betterAuth } from "better-auth";
+import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
 import { Resend } from "resend";
+import { Pool } from "pg";
+
+// Workaround for SSL certificate issues in some environments
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 
 // Lazy initialization of Resend
 function getResend(): Resend {
@@ -11,131 +17,185 @@ function getResend(): Resend {
   return new Resend(apiKey);
 }
 
-// Database URL
-const databaseUrl = process.env.CRM_POSTGRES_URL_NON_POOLING || 
-                   process.env.crm_POSTGRES_URL_NON_POOLING ||
-                   process.env.POSTGRES_URL || 
-                   process.env.DATABASE_URL || 
-                   process.env.CRM_POSTGRES_URL ||
-                   process.env.crm_POSTGRES_URL;
-
-console.log("[Auth] Database URL found:", databaseUrl ? "YES" : "NO");
-console.log("[Auth] BETTER_AUTH_SECRET found:", process.env.BETTER_AUTH_SECRET ? "YES" : "NO");
-
-if (!databaseUrl) {
-  console.error("[Auth] Database URL not found - auth will not work properly");
+// Get database URL
+function getDatabaseUrl(): string | null {
+  return process.env.CRM_POSTGRES_URL_NON_POOLING || 
+         process.env.crm_POSTGRES_URL_NON_POOLING ||
+         process.env.POSTGRES_URL || 
+         process.env.DATABASE_URL || 
+         process.env.CRM_POSTGRES_URL ||
+         process.env.crm_POSTGRES_URL || null;
 }
 
-if (!process.env.BETTER_AUTH_SECRET) {
-  console.error("[Auth] BETTER_AUTH_SECRET not found");
+// Get database pool
+function getDatabasePool() {
+  const databaseUrl = getDatabaseUrl();
+  if (!databaseUrl) return null;
+  
+  const dbUrl = process.env.CRM_POSTGRES_URL_NON_POOLING || databaseUrl;
+  const isSupabase = dbUrl.includes('supabase.co') || dbUrl.includes('pooler.supabase');
+  
+  return new Pool({
+    connectionString: dbUrl,
+    ssl: isSupabase 
+      ? { rejectUnauthorized: false }
+      : undefined,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
 }
 
-// Create auth instance with error handling
+// Export auth config for migrations
+export function getAuthConfig(): BetterAuthOptions | null {
+  const databaseUrl = getDatabaseUrl();
+  const pool = getDatabasePool();
+  
+  if (!databaseUrl || !pool) {
+    console.error("[Auth] Database not configured");
+    return null;
+  }
+  
+  if (!process.env.BETTER_AUTH_SECRET) {
+    console.error("[Auth] BETTER_AUTH_SECRET not configured");
+    return null;
+  }
+  
+  return {
+    secret: process.env.BETTER_AUTH_SECRET,
+    baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
+    trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
+    database: pool,
+    emailAndPassword: {
+      enabled: true,
+      minPasswordLength: 8,
+      sendResetEmail: async ({ user, url }: { user: any; url: string }) => {
+        const resend = getResend();
+        await resend.emails.send({
+          from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
+          to: user.email,
+          subject: 'Reset your password',
+          html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #62ac4a;">Reset Your Password</h2>
+            <p>Hello ${user.name || user.email},</p>
+            <p>Click to reset: <a href="${url}">${url}</a></p>
+            <p>Expires in 1 hour.</p>
+          </div>`,
+        });
+      },
+    },
+    emailVerification: {
+      sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
+        const resend = getResend();
+        await resend.emails.send({
+          from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
+          to: user.email,
+          subject: 'Verify your email',
+          html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #62ac4a;">Verify Your Email</h2>
+            <p>Welcome! Click to verify: <a href="${url}">${url}</a></p>
+            <p>Expires in 24 hours.</p>
+          </div>`,
+        });
+      },
+    },
+    socialProviders: {
+      google: {
+        clientId: process.env.GOOGLE_CLIENT_ID || "",
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+        ...(process.env.GOOGLE_ALLOWED_DOMAIN ? {
+          authorization: {
+            params: { hd: process.env.GOOGLE_ALLOWED_DOMAIN },
+          },
+        } : {}),
+      },
+    },
+    plugins: [
+      admin({
+        adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
+      }),
+    ],
+    session: { expiresIn: 60 * 60 * 24 * 7 },
+    advanced: {
+      useSecureCookies: process.env.NODE_ENV === "production",
+      cookiePrefix: "greenhat_tools",
+      crossSubDomainCookies: {
+        enabled: true,
+        domain: ".greenhatsec.com",
+      },
+    },
+  };
+}
+
+// Singleton auth instance
 let authInstance: ReturnType<typeof betterAuth> | null = null;
 let initError: string | null = null;
 
-try {
-  if (databaseUrl && process.env.BETTER_AUTH_SECRET) {
-    console.log("[Auth] Initializing Better Auth...");
-    
-    authInstance = betterAuth({
-      secret: process.env.BETTER_AUTH_SECRET,
-      
-      database: {
-        type: "postgres" as const,
-        url: databaseUrl,
-      },
+function createAuth() {
+  const databaseUrl = getDatabaseUrl();
 
-      emailAndPassword: {
-        enabled: true,
-        minPasswordLength: 8,
-        
-        sendResetEmail: async ({ user, url }: { user: any; url: string }) => {
-          const resend = getResend();
-          await resend.emails.send({
-            from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-            to: user.email,
-            subject: 'Reset your password',
-            html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #62ac4a;">Reset Your Password</h2>
-              <p>Hello ${user.name || user.email},</p>
-              <p>Click to reset: <a href="${url}">${url}</a></p>
-              <p>Expires in 1 hour.</p>
-            </div>`,
-          });
-        },
-      },
-
-      emailVerification: {
-        sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
-          const resend = getResend();
-          await resend.emails.send({
-            from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-            to: user.email,
-            subject: 'Verify your email',
-            html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #62ac4a;">Verify Your Email</h2>
-              <p>Welcome! Click to verify: <a href="${url}">${url}</a></p>
-              <p>Expires in 24 hours.</p>
-            </div>`,
-          });
-        },
-      },
-
-      socialProviders: {
-        google: {
-          clientId: process.env.GOOGLE_CLIENT_ID || "",
-          clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-          ...(process.env.GOOGLE_ALLOWED_DOMAIN ? {
-            authorization: {
-              params: {
-                hd: process.env.GOOGLE_ALLOWED_DOMAIN,
-              },
-            },
-          } : {}),
-        },
-      },
-
-      plugins: [
-        admin({
-          adminUserIds: ["09649c79-975a-4967-9299-440b2b0fadee"],
-        }),
-      ],
-
-      session: {
-        expiresIn: 60 * 60 * 24 * 7,
-      },
-
-      advanced: {
-        useSecureCookies: process.env.NODE_ENV === "production",
-        cookiePrefix: "greenhat_tools",
-        crossSubDomainCookies: {
-          enabled: true,
-          domain: ".greenhatsec.com",
-        },
-      },
-    });
-    
-    console.log("[Auth] Better Auth initialized successfully");
-  } else {
-    initError = "Missing database URL or BETTER_AUTH_SECRET";
-    console.error("[Auth] Cannot initialize:", initError);
+  if (!databaseUrl) {
+    const err = "Database URL not configured";
+    console.error("[Auth] " + err);
+    initError = err;
+    return null;
   }
-} catch (error) {
-  initError = error instanceof Error ? error.message : String(error);
-  console.error("[Auth] Failed to initialize Better Auth:", initError);
+
+  if (!process.env.BETTER_AUTH_SECRET) {
+    const err = "BETTER_AUTH_SECRET not configured";
+    console.error("[Auth] " + err);
+    initError = err;
+    return null;
+  }
+
+  try {
+    const config = getAuthConfig();
+    if (!config) {
+      throw new Error("Failed to create auth config");
+    }
+    
+    const instance = betterAuth(config);
+    return instance;
+  } catch (error) {
+    const err = error instanceof Error ? error.message : "Unknown error";
+    console.error("[Auth] Failed to initialize:", err);
+    initError = err;
+    return null;
+  }
 }
 
-// Export with fallback
-export const auth = authInstance || {
-  handler: () => {
-    console.error("[Auth] Handler called but auth not initialized:", initError);
+function getAuthInstance() {
+  if (!authInstance) {
+    authInstance = createAuth();
+  }
+  return authInstance;
+}
+
+// Handler that initializes on first use
+async function handler(request: Request): Promise<Response> {
+  const instance = getAuthInstance();
+  
+  if (!instance) {
     return new Response(
-      JSON.stringify({ error: "Auth not configured", details: initError }), 
+      JSON.stringify({ 
+        error: "Auth not configured", 
+        details: initError || "Unknown initialization error",
+      }), 
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
+  }
+
+  return await instance.handler(request);
+}
+
+// Export auth object
+export const auth = {
+  handler,
+  get api() {
+    const instance = getAuthInstance();
+    return instance?.api || {};
   },
-  api: {} as any,
 };
 
+// Admin client for dashboard  
 export { adminClient } from "better-auth/client/plugins";
