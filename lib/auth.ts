@@ -198,3 +198,4 @@ export const auth = {
 
 // Admin client for dashboard  
 export { adminClient } from "better-auth/client/plugins";
+// Build timestamp: Fri Feb  6 22:11:05 PST 2026
