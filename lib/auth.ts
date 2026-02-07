@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
+import { Pool } from "pg";
 
 // Get database URL
 function getDatabaseUrl(): string | null {
@@ -10,6 +11,22 @@ function getDatabaseUrl(): string | null {
          process.env.CRM_POSTGRES_URL ||
          process.env.crm_POSTGRES_URL;
   return url;
+}
+
+// Create database pool
+function createPool() {
+  const databaseUrl = getDatabaseUrl();
+  if (!databaseUrl) return null;
+
+  console.log("[Auth] Creating database pool...");
+  
+  return new Pool({
+    connectionString: databaseUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
 }
 
 // Lazy initialization
@@ -23,10 +40,10 @@ function getAuthInstance() {
   initAttempts++;
   console.log(`[Auth] Initialization attempt ${initAttempts}`);
   
-  const databaseUrl = getDatabaseUrl();
+  const pool = createPool();
 
-  if (!databaseUrl) {
-    initError = "Database URL not configured. Checked: CRM_POSTGRES_URL_NON_POOLING, crm_POSTGRES_URL_NON_POOLING, POSTGRES_URL, DATABASE_URL, CRM_POSTGRES_URL, crm_POSTGRES_URL";
+  if (!pool) {
+    initError = "Database not configured";
     console.error("[Auth]", initError);
     return null;
   }
@@ -38,14 +55,7 @@ function getAuthInstance() {
   }
 
   try {
-    // Add sslmode for Supabase
-    let url = databaseUrl;
-    if (url.includes('supabase') && !url.includes('sslmode=')) {
-      url += url.includes('?') ? '&' : '?';
-      url += 'sslmode=require';
-    }
-    
-    console.log("[Auth] Creating Better Auth with URL:", url.substring(0, 50) + "...");
+    console.log("[Auth] Creating Better Auth with Pool...");
     console.log("[Auth] BETTER_AUTH_SECRET:", process.env.BETTER_AUTH_SECRET ? "Set" : "Not set");
     console.log("[Auth] GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "Set" : "Not set");
     
@@ -53,10 +63,7 @@ function getAuthInstance() {
       secret: process.env.BETTER_AUTH_SECRET,
       baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
       trustedOrigins: ["https://admin.greenhatsec.com", "https://tools.greenhatsec.com"],
-      database: {
-        provider: "postgres",
-        url: url,
-      },
+      database: pool,  // Pass Pool directly - this is the correct way!
       emailAndPassword: {
         enabled: true,
         minPasswordLength: 8,
