@@ -1,20 +1,10 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
-import { Resend } from "resend";
 import { Pool } from "pg";
 
 // Workaround for SSL certificate issues in some environments
 if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
-
-// Lazy initialization of Resend
-function getResend(): Resend {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    throw new Error("RESEND_API_KEY not set");
-  }
-  return new Resend(apiKey);
 }
 
 // Get database URL
@@ -69,35 +59,6 @@ export function getAuthConfig(): BetterAuthOptions | null {
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
-      sendResetEmail: async ({ user, url }: { user: any; url: string }) => {
-        const resend = getResend();
-        await resend.emails.send({
-          from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: user.email,
-          subject: 'Reset your password',
-          html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #62ac4a;">Reset Your Password</h2>
-            <p>Hello ${user.name || user.email},</p>
-            <p>Click to reset: <a href="${url}">${url}</a></p>
-            <p>Expires in 1 hour.</p>
-          </div>`,
-        });
-      },
-    },
-    emailVerification: {
-      sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
-        const resend = getResend();
-        await resend.emails.send({
-          from: `Greenhat Tools <${process.env.RESEND_FROM_EMAIL || 'auth@emails.greenhatsec.com'}>`,
-          to: user.email,
-          subject: 'Verify your email',
-          html: `<div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #62ac4a;">Verify Your Email</h2>
-            <p>Welcome! Click to verify: <a href="${url}">${url}</a></p>
-            <p>Expires in 24 hours.</p>
-          </div>`,
-        });
-      },
     },
     socialProviders: {
       google: {
