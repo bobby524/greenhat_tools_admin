@@ -103,3 +103,4 @@ export default function Home() {
 // Redeploy: Sat Feb  7 01:58:17 PST 2026
 // Deploy after env vars added: Sat Feb  7 06:46:46 PST 2026
 // Force fresh deploy: Sat Feb  7 06:49:35 PST 2026
+// Redeploy with GH secrets: Sat Feb  7 06:55:09 PST 2026
