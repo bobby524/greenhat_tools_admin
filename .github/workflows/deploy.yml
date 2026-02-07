@@ -16,10 +16,16 @@ jobs:
           node-version: '20'
           
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
         
       - name: Build
         run: npm run build
+        env:
+          crm_POSTGRES_URL_NON_POOLING: ${{ secrets.crm_POSTGRES_URL_NON_POOLING }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
