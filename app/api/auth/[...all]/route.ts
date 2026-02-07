@@ -44,3 +44,9 @@ export async function DELETE(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   return handleAuth(request);
 }
+
+// Ensure Node.js runtime for database operations
+export const runtime = "nodejs";
+
+// Force dynamic rendering for auth routes
+export const dynamic = "force-dynamic";
