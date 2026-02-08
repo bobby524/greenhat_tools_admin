@@ -3,37 +3,7 @@ import { Pool } from "pg";
 import { sendInviteEmail } from "@/lib/email";
 import { randomUUID } from "crypto";
 import { headers } from "next/headers";
-
-// Workaround for SSL certificate issues in some environments
-if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
-
-// Use the same database connection logic as auth.ts
-function getDatabaseUrl(): string | null {
-  return (
-    process.env.crm_POSTGRES_URL_NON_POOLING ||
-    process.env.POSTGRES_URL ||
-    process.env.DATABASE_URL ||
-    process.env.CRM_POSTGRES_URL ||
-    null
-  );
-}
-
-function getPool() {
-  const databaseUrl = getDatabaseUrl();
-  if (!databaseUrl) return null;
-
-  const isSupabase = databaseUrl.includes("supabase.co");
-
-  return new Pool({
-    connectionString: databaseUrl,
-    ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
-    max: 5,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-  });
-}
+import { getPool } from "@/lib/db";
 
 // Auto-migrate: ensure invites table exists
 async function ensureInvitesTable(pool: Pool): Promise<void> {

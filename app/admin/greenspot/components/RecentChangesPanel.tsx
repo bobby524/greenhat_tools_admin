@@ -1,17 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import CrmInlineError from "./components/CrmInlineError";
-import { DealPipelineSettings } from "./components/DealPipelineSettings";
-import { EntitySettingsEditor } from "./components/EntitySettingsEditor";
-import { auditEventsRepo } from "./data/auditEventsRepo";
-import type { AuditEvent } from "./data/types";
-import {
-  initialContactFields,
-  initialContactSections,
-  type FieldDefinition,
-  type SectionDefinition,
-} from "./data/customization";
+import CrmInlineError from "./CrmInlineError";
+import { auditEventsRepo } from "../data/auditEventsRepo";
+import type { AuditEvent } from "../data/types";
 
 type AuditFilters = {
   entityType: string;
@@ -29,275 +21,7 @@ const auditEntityOptions = [
   { value: "crm_activities", label: "Activities" },
 ];
 
-const initialCompanyFields: FieldDefinition[] = [
-  {
-    id: "company-name",
-    label: "Company name",
-    fieldKey: "name",
-    type: "text",
-    required: true,
-  },
-  {
-    id: "company-domain",
-    label: "Domain",
-    fieldKey: "domain",
-    type: "text",
-    required: false,
-  },
-  {
-    id: "company-size",
-    label: "Employee count",
-    fieldKey: "employee_count",
-    type: "number",
-    required: false,
-  },
-  {
-    id: "company-industry",
-    label: "Industry",
-    fieldKey: "industry",
-    type: "select",
-    required: false,
-    options: ["Fintech", "Healthcare", "Retail"],
-  },
-  {
-    id: "company-renewal",
-    label: "Renewal date",
-    fieldKey: "renewal_date",
-    type: "date",
-    required: false,
-  },
-];
-
-const initialCompanySections: SectionDefinition[] = [
-  {
-    id: "company-overview",
-    name: "Overview",
-    fieldIds: ["company-name", "company-domain", "company-size"],
-  },
-  {
-    id: "company-insights",
-    name: "Insights",
-    fieldIds: ["company-industry", "company-renewal"],
-  },
-];
-
-const initialDealFields: FieldDefinition[] = [
-  {
-    id: "deal-name",
-    label: "Deal name",
-    fieldKey: "name",
-    type: "text",
-    required: true,
-  },
-  {
-    id: "deal-value",
-    label: "Deal value",
-    fieldKey: "value",
-    type: "number",
-    required: false,
-  },
-  {
-    id: "deal-close-date",
-    label: "Close date",
-    fieldKey: "close_date",
-    type: "date",
-    required: false,
-  },
-  {
-    id: "deal-owner",
-    label: "Deal owner",
-    fieldKey: "owner_id",
-    type: "user",
-    required: false,
-  },
-  {
-    id: "deal-type",
-    label: "Deal type",
-    fieldKey: "deal_type",
-    type: "select",
-    required: false,
-    options: ["New business", "Expansion", "Renewal"],
-    enforceOptions: true,
-  },
-  {
-    id: "deal-stakeholders",
-    label: "Stakeholders",
-    fieldKey: "stakeholders",
-    type: "multi_select",
-    required: false,
-    options: ["Finance", "Legal", "Operations"],
-    enforceOptions: true,
-  },
-];
-
-const initialDealSections: SectionDefinition[] = [
-  {
-    id: "deal-overview",
-    name: "Overview",
-    fieldIds: ["deal-name", "deal-value", "deal-close-date"],
-  },
-  {
-    id: "deal-ownership",
-    name: "Ownership",
-    fieldIds: ["deal-owner", "deal-type", "deal-stakeholders"],
-  },
-];
-
-const initialTaskFields: FieldDefinition[] = [
-  {
-    id: "task-title",
-    label: "Task title",
-    fieldKey: "title",
-    type: "text",
-    required: true,
-  },
-  {
-    id: "task-due-date",
-    label: "Due date",
-    fieldKey: "due_date",
-    type: "date",
-    required: false,
-  },
-  {
-    id: "task-assignee",
-    label: "Assignee",
-    fieldKey: "assignee_id",
-    type: "user",
-    required: false,
-  },
-  {
-    id: "task-priority",
-    label: "Priority",
-    fieldKey: "priority",
-    type: "select",
-    required: false,
-    options: ["Low", "Medium", "High"],
-    enforceOptions: true,
-  },
-  {
-    id: "task-tags",
-    label: "Tags",
-    fieldKey: "tags",
-    type: "multi_select",
-    required: false,
-    options: ["Follow-up", "Paperwork", "Internal"],
-    enforceOptions: true,
-  },
-  {
-    id: "task-link",
-    label: "Reference URL",
-    fieldKey: "reference_url",
-    type: "url",
-    required: false,
-  },
-];
-
-const initialTaskSections: SectionDefinition[] = [
-  {
-    id: "task-basics",
-    name: "Task basics",
-    fieldIds: ["task-title", "task-due-date", "task-assignee"],
-  },
-  {
-    id: "task-context",
-    name: "Context",
-    fieldIds: ["task-priority", "task-tags", "task-link"],
-  },
-];
-
-const initialActivityFields: FieldDefinition[] = [
-  {
-    id: "activity-type",
-    label: "Activity type",
-    fieldKey: "activity_type",
-    type: "select",
-    required: true,
-    options: ["Note", "Call", "Meeting", "Email"],
-    enforceOptions: true,
-  },
-  {
-    id: "activity-outcome",
-    label: "Outcome",
-    fieldKey: "outcome",
-    type: "select",
-    required: false,
-    options: ["Positive", "Neutral", "Needs follow-up"],
-    enforceOptions: true,
-  },
-  {
-    id: "activity-follow-up",
-    label: "Follow-up URL",
-    fieldKey: "follow_up_url",
-    type: "url",
-    required: false,
-  },
-];
-
-const initialActivitySections: SectionDefinition[] = [
-  {
-    id: "activity-summary",
-    name: "Summary",
-    fieldIds: ["activity-type", "activity-outcome"],
-  },
-  {
-    id: "activity-links",
-    name: "Links",
-    fieldIds: ["activity-follow-up"],
-  },
-];
-
-type EntitySettings = {
-  id: string;
-  title: string;
-  description: string;
-  fields: FieldDefinition[];
-  sections: SectionDefinition[];
-};
-
-const entitySettings: EntitySettings[] = [
-  {
-    id: "contacts",
-    title: "Contacts",
-    description:
-      "Define the fields and layout your team captures when managing contacts.",
-    fields: initialContactFields,
-    sections: initialContactSections,
-  },
-  {
-    id: "companies",
-    title: "Companies",
-    description:
-      "Configure company properties, sections, and the order they appear in records.",
-    fields: initialCompanyFields,
-    sections: initialCompanySections,
-  },
-  {
-    id: "deals",
-    title: "Deals",
-    description:
-      "Control deal fields, ownership metadata, and section layouts for the pipeline.",
-    fields: initialDealFields,
-    sections: initialDealSections,
-  },
-  {
-    id: "tasks",
-    title: "Tasks",
-    description:
-      "Customize task fields, assignments, and validation rules for follow-up work.",
-    fields: initialTaskFields,
-    sections: initialTaskSections,
-  },
-  {
-    id: "activities",
-    title: "Activities",
-    description:
-      "Keep activity logging lightweight with a few optional custom fields.",
-    fields: initialActivityFields,
-    sections: initialActivitySections,
-  },
-];
-
-function RecentChangesPanel() {
+export function RecentChangesPanel() {
   const [filters, setFilters] = useState<AuditFilters>({
     entityType: "",
     actorId: "",
@@ -354,9 +78,7 @@ function RecentChangesPanel() {
   return (
     <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-6">
       <div className="space-y-2">
-        <h3 className="text-xl font-semibold text-gray-900">
-          Recent changes
-        </h3>
+        <h3 className="text-xl font-semibold text-gray-900">Recent changes</h3>
         <p className="text-sm text-gray-600">
           Track key CRM updates across records. Activity is captured server-side
           to prevent actor spoofing.
@@ -504,9 +226,7 @@ function RecentChangesPanel() {
                       </div>
                     </td>
                     <td className="px-4 py-4">{event.event_type}</td>
-                    <td className="px-4 py-4">
-                      {event.actor_id ?? "System"}
-                    </td>
+                    <td className="px-4 py-4">{event.actor_id ?? "System"}</td>
                     <td className="px-4 py-4 text-xs text-gray-500">
                       {event.payload ? JSON.stringify(event.payload) : "—"}
                     </td>
@@ -517,31 +237,6 @@ function RecentChangesPanel() {
           </table>
         </div>
       )}
-    </section>
-  );
-}
-
-export default function SettingsWorkspace() {
-  return (
-    <section className="space-y-10">
-      <div className="space-y-2">
-        <h2 className="text-2xl font-semibold text-gray-900">
-          Admin workspace
-        </h2>
-        <p className="text-sm text-gray-600">
-          Manage CRM field definitions and layout sections for contacts,
-          companies, deals, tasks, and activities. Changes are saved to the 
-          Supabase database and immediately reflected on the tools site.
-        </p>
-      </div>
-
-      <div className="space-y-10">
-        <RecentChangesPanel />
-        <DealPipelineSettings />
-        {entitySettings.map((entity) => (
-          <EntitySettingsEditor key={entity.id} {...entity} />
-        ))}
-      </div>
     </section>
   );
 }

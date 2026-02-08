@@ -1,43 +1,11 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
-import { Pool } from "pg";
-
-// Workaround for SSL certificate issues in some environments
-if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
-
-// Get database URL - check multiple possible env var names
-function getDatabaseUrl(): string | null {
-  return (
-    process.env.crm_POSTGRES_URL_NON_POOLING ||
-    process.env.POSTGRES_URL ||
-    process.env.DATABASE_URL ||
-    process.env.CRM_POSTGRES_URL ||
-    null
-  );
-}
-
-// Get database pool
-function getDatabasePool() {
-  const databaseUrl = getDatabaseUrl();
-  if (!databaseUrl) return null;
-
-  const isSupabase = databaseUrl.includes("supabase.co");
-
-  return new Pool({
-    connectionString: databaseUrl,
-    ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-  });
-}
+import { getDatabaseUrl, getPoolWithOptions } from "@/lib/db";
 
 // Export auth config for migrations
 export function getAuthConfig(): BetterAuthOptions | null {
   const databaseUrl = getDatabaseUrl();
-  const pool = getDatabasePool();
+  const pool = getPoolWithOptions({ max: 20 });
 
   if (!databaseUrl || !pool) {
     console.error("[Auth] Database not configured");
