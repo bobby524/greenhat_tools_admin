@@ -108,7 +108,7 @@ export default function AccessControlsModule() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/users");
+      const response = await fetch("/api/users", { credentials: "include" });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || "Failed to fetch users");
@@ -125,7 +125,7 @@ export default function AccessControlsModule() {
 
   async function fetchInvites() {
     try {
-      const response = await fetch("/api/invites");
+      const response = await fetch("/api/invites", { credentials: "include" });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || "Failed to fetch invites");
@@ -148,6 +148,7 @@ export default function AccessControlsModule() {
       const response = await fetch("/api/invites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
       });
 
@@ -176,6 +177,7 @@ export default function AccessControlsModule() {
     try {
       const response = await fetch(`/api/invites?id=${encodeURIComponent(inviteId)}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (!response.ok) {
@@ -198,6 +200,7 @@ export default function AccessControlsModule() {
       const response = await fetch("/api/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ userId, role: newRole }),
       });
 
