@@ -2,28 +2,61 @@
 
 import { useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { 
+  LayoutDashboard, 
+  Shield, 
+  Users, 
+  Lock, 
+  LogOut, 
+  Menu,
+  X,
+  ChevronDown
+} from "lucide-react";
 
 interface AdminLayoutProps {
   children: React.ReactNode;
   title: string;
 }
 
+// Green color palette matching tools.greenhatsec.com
+const COLORS = {
+  primary: "#62ac4a",
+  primaryHover: "#4e8a3a",
+  primaryDeep: "#41734a",
+  sidebarBg: "#0f2815",
+  sidebarSurface: "#1a3d23",
+  sidebarHover: "#2d5a3a",
+  sidebarBorder: "#2d5a3a",
+  textLight: "#f1f5f9",
+  textMuted: "#94a3b8",
+  bgMain: "#f9fafb",
+  cardBg: "#ffffff",
+  borderLight: "#e5e7eb",
+  borderHover: "#62ac4a",
+};
+
 export default function AdminLayout({ children, title }: AdminLayoutProps) {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     checkSession();
   }, []);
 
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname]);
+
   async function checkSession() {
     try {
       const { data } = await authClient.getSession();
       setSession(data);
-      // Check if user is admin (Better Auth stores role in user object or check by ID/email)
       const userRole = (data?.user as any)?.role;
       const userEmail = data?.user?.email;
       setIsAdmin(
@@ -44,174 +77,162 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: 40, fontFamily: "Arial, sans-serif" }}>
-        Loading...
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex items-center gap-3 text-gray-500">
+          <div className="w-5 h-5 border-2 border-gray-300 border-t-green-600 rounded-full animate-spin" />
+          Loading...
+        </div>
       </div>
     );
   }
 
   if (!session?.user) {
     return (
-      <div style={{ padding: 40, fontFamily: "Arial, sans-serif" }}>
-        <h1>Access Denied</h1>
-        <p>Please sign in to access the admin dashboard.</p>
-        <button
-          onClick={() => authClient.signIn.social({ provider: "google", callbackURL: "/admin" })}
-          style={{
-            padding: "10px 20px",
-            background: "#2563eb",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer",
-            marginTop: 10,
-          }}
-        >
-          Sign In with Google
-        </button>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="max-w-md w-full bg-white rounded-xl border border-gray-200 p-8 text-center">
+          <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-6 h-6 text-red-600" />
+          </div>
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">Access Denied</h1>
+          <p className="text-gray-600 mb-6">Please sign in to access the admin dashboard.</p>
+          <button
+            onClick={() => authClient.signIn.social({ provider: "google", callbackURL: "/admin" })}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium"
+          >
+            Sign In with Google
+          </button>
+        </div>
       </div>
     );
   }
 
   if (!isAdmin) {
     return (
-      <div style={{ padding: 40, fontFamily: "Arial, sans-serif" }}>
-        <h1>Access Denied</h1>
-        <p>You do not have permission to access the admin dashboard.</p>
-        <p>Current role: {session.user.role || "user"}</p>
-        <button
-          onClick={handleSignOut}
-          style={{
-            padding: "10px 20px",
-            background: "#dc2626",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer",
-            marginTop: 10,
-          }}
-        >
-          Sign Out
-        </button>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="max-w-md w-full bg-white rounded-xl border border-gray-200 p-8 text-center">
+          <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-6 h-6 text-red-600" />
+          </div>
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">Access Denied</h1>
+          <p className="text-gray-600 mb-2">You do not have permission to access the admin dashboard.</p>
+          <p className="text-sm text-gray-500 mb-6">Current role: {session.user.role || "user"}</p>
+          <button
+            onClick={handleSignOut}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign Out
+          </button>
+        </div>
       </div>
     );
   }
 
+  const navItems = [
+    { href: "/admin", icon: LayoutDashboard, label: "Dashboard" },
+    { href: "/admin/mcp-firewall", icon: Shield, label: "MCP Firewall" },
+    { href: "/admin/crm", icon: Users, label: "CRM Admin" },
+    { href: "/admin/access-controls", icon: Lock, label: "Access Controls" },
+  ];
+
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "Arial, sans-serif" }}>
+    <div className="min-h-screen flex bg-gray-50">
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Mobile Hamburger Button */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="fixed top-4 left-4 z-50 p-2 rounded-lg bg-[#0f2815] border border-[#2d5a3a] lg:hidden"
+        aria-label="Toggle sidebar"
+      >
+        {sidebarOpen ? (
+          <X className="w-5 h-5 text-gray-200" />
+        ) : (
+          <Menu className="w-5 h-5 text-gray-200" />
+        )}
+      </button>
+
       {/* Sidebar */}
       <aside
-        style={{
-          width: "260px",
-          background: "#1a1a2e",
-          color: "white",
-          padding: "20px",
-          display: "flex",
-          flexDirection: "column",
-        }}
+        className={`fixed top-0 left-0 z-40 h-full w-64 bg-[#0f2815] border-r border-[#2d5a3a] flex flex-col transition-transform duration-200 lg:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
       >
-        <div style={{ marginBottom: "30px" }}>
-          <h2 style={{ margin: 0, fontSize: "1.25rem" }}>Greenhat Admin</h2>
-          <p style={{ margin: "5px 0 0", fontSize: "0.875rem", opacity: 0.7 }}>
-            {session.user.email}
-          </p>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-4 border-b border-[#2d5a3a]">
+          <div className="w-8 h-8 rounded-lg bg-[#62ac4a] flex items-center justify-center flex-shrink-0">
+            <Shield className="w-4 h-4 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-semibold text-gray-100">Greenhat Admin</h2>
+            <p className="text-xs text-gray-400 truncate">{session.user.email}</p>
+          </div>
         </div>
 
-        <nav style={{ flex: 1 }}>
-          <NavLink href="/admin" icon="🏠">Dashboard</NavLink>
-          <NavLink href="/admin/mcp-firewall" icon="🛡️">MCP Firewall</NavLink>
-          <NavLink href="/admin/crm" icon="👥">CRM Admin</NavLink>
-          <NavLink href="/admin/access-controls" icon="🔐">Access Controls</NavLink>
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+          {navItems.map((item) => {
+            const isActive = pathname === item.href;
+            const Icon = item.icon;
+            return (
+              <a
+                key={item.href}
+                href={item.href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  router.push(item.href);
+                }}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive
+                    ? "bg-[#1a3d23] text-white"
+                    : "text-gray-400 hover:text-white hover:bg-[#2d5a3a]"
+                }`}
+              >
+                <Icon className={`w-[18px] h-[18px] ${isActive ? "text-[#62ac4a]" : ""}`} />
+                <span>{item.label}</span>
+              </a>
+            );
+          })}
         </nav>
 
-        <div style={{ marginTop: "auto", paddingTop: "20px", borderTop: "1px solid #333" }}>
+        {/* Bottom Section */}
+        <div className="border-t border-[#2d5a3a] p-2">
           <button
             onClick={handleSignOut}
-            style={{
-              width: "100%",
-              padding: "10px",
-              background: "transparent",
-              color: "white",
-              border: "1px solid #444",
-              borderRadius: "6px",
-              cursor: "pointer",
-              textAlign: "left",
-            }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#2d5a3a] transition-colors text-sm font-medium"
           >
-            🚪 Sign Out
+            <LogOut className="w-[18px] h-[18px]" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main style={{ flex: 1, background: "#f5f5f5", overflow: "auto" }}>
-        <header
-          style={{
-            background: "white",
-            padding: "20px 30px",
-            borderBottom: "1px solid #e0e0e0",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h1 style={{ margin: 0, fontSize: "1.5rem" }}>{title}</h1>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span
-              style={{
-                background: "#10b981",
-                color: "white",
-                padding: "4px 12px",
-                borderRadius: "12px",
-                fontSize: "0.75rem",
-                fontWeight: "bold",
-              }}
-            >
-              ADMIN
-            </span>
+      <main className="flex-1 lg:ml-64 min-h-screen bg-gray-50">
+        {/* Header */}
+        <header className="bg-white border-b border-gray-200 px-6 py-4 lg:px-8">
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-semibold text-gray-900 ml-10 lg:ml-0">{title}</h1>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#62ac4a]/10 text-[#41734a] border border-[#62ac4a]/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#62ac4a]" />
+                ADMIN
+              </span>
+            </div>
           </div>
         </header>
 
-        <div style={{ padding: "30px" }}>{children}</div>
+        {/* Content */}
+        <div className="p-4 lg:p-8">
+          {children}
+        </div>
       </main>
     </div>
-  );
-}
-
-function NavLink({
-  href,
-  icon,
-  children,
-}: {
-  href: string;
-  icon: string;
-  children: React.ReactNode;
-}) {
-  const router = useRouter();
-  const isActive = typeof window !== "undefined" && window.location.pathname === href;
-
-  return (
-    <a
-      href={href}
-      onClick={(e) => {
-        e.preventDefault();
-        router.push(href);
-      }}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        padding: "12px 16px",
-        margin: "4px 0",
-        borderRadius: "8px",
-        textDecoration: "none",
-        color: isActive ? "white" : "rgba(255,255,255,0.7)",
-        background: isActive ? "#2563eb" : "transparent",
-        transition: "all 0.2s",
-      }}
-    >
-      <span>{icon}</span>
-      <span>{children}</span>
-    </a>
   );
 }
