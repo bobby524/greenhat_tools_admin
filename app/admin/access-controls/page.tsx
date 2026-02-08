@@ -14,7 +14,11 @@ import {
   CheckCircle,
   AlertCircle,
   Plus,
-  Search
+  Search,
+  Send,
+  Trash2,
+  RefreshCw,
+  Clock
 } from "lucide-react";
 
 interface User {
@@ -33,6 +37,20 @@ interface Role {
   name: string;
   permissions: string[];
   description: string;
+}
+
+interface Invite {
+  id: string;
+  email: string;
+  token: string;
+  role: string;
+  invitedBy: string;
+  invitedByName: string | null;
+  invitedByEmail: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdAt: string;
+  status: "pending" | "used" | "expired";
 }
 
 const DEFAULT_ROLES: Role[] = [
@@ -59,6 +77,7 @@ const DEFAULT_ROLES: Role[] = [
 export default function AccessControlsModule() {
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>(DEFAULT_ROLES);
+  const [invites, setInvites] = useState<Invite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -66,9 +85,17 @@ export default function AccessControlsModule() {
   const [updatingRole, setUpdatingRole] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  
+  // Invite modal state
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("user");
+  const [creatingInvite, setCreatingInvite] = useState(false);
+  const [activeTab, setActiveTab] = useState<"users" | "invites">("users");
 
   useEffect(() => {
     fetchUsers();
+    fetchInvites();
   }, []);
 
   useEffect(() => {
@@ -94,6 +121,76 @@ export default function AccessControlsModule() {
       setError(err instanceof Error ? err.message : "Failed to fetch users");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchInvites() {
+    try {
+      const response = await fetch("/api/invites");
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to fetch invites");
+      }
+      const data = await response.json();
+      setInvites(data.invites || []);
+    } catch (err) {
+      console.error("[AccessControls] Error fetching invites:", err);
+    }
+  }
+
+  async function createInvite(e: React.FormEvent) {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+
+    setCreatingInvite(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create invite");
+      }
+
+      setSuccessMessage(`Invitation sent to ${inviteEmail}`);
+      setInviteEmail("");
+      setInviteRole("user");
+      setShowInviteModal(false);
+      fetchInvites();
+    } catch (err) {
+      console.error("[AccessControls] Error creating invite:", err);
+      setError(err instanceof Error ? err.message : "Failed to create invite");
+    } finally {
+      setCreatingInvite(false);
+    }
+  }
+
+  async function revokeInvite(inviteId: string) {
+    if (!confirm("Are you sure you want to revoke this invitation?")) return;
+
+    try {
+      const response = await fetch("/api/invites", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: inviteId }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to revoke invite");
+      }
+
+      setSuccessMessage("Invitation revoked");
+      fetchInvites();
+    } catch (err) {
+      console.error("[AccessControls] Error revoking invite:", err);
+      setError(err instanceof Error ? err.message : "Failed to revoke invite");
     }
   }
 
@@ -170,6 +267,32 @@ export default function AccessControlsModule() {
         </div>
       )}
 
+      {/* Tabs */}
+      <div className="flex items-center gap-4 mb-6 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab("users")}
+          className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "users"
+              ? "border-[#62ac4a] text-[#62ac4a]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Users ({users.length})
+        </button>
+        <button
+          onClick={() => setActiveTab("invites")}
+          className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "invites"
+              ? "border-[#62ac4a] text-[#62ac4a]"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Pending Invites ({invites.filter(i => i.status === "pending").length})
+        </button>
+      </div>
+
+      {activeTab === "users" ? (
+        <>
       {/* Stats Overview */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <StatCard 
@@ -216,7 +339,10 @@ export default function AccessControlsModule() {
                 className="pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#62ac4a] focus:border-transparent w-full sm:w-64"
               />
             </div>
-            <button className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium text-sm">
+            <button 
+              onClick={() => setShowInviteModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium text-sm"
+            >
               <Plus className="w-4 h-4" />
               Invite User
             </button>
@@ -334,6 +460,162 @@ export default function AccessControlsModule() {
           </div>
         </div>
       </div>
+
+        </>
+      ) : (
+        /* Invites Tab */
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="p-6 border-b border-gray-200">
+            <h3 className="text-lg font-semibold text-gray-900">Pending Invitations</h3>
+            <p className="text-sm text-gray-500 mt-1">Manage sent invitations</p>
+          </div>
+          {invites.filter(i => i.status === "pending").length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              <Mail className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+              <p>No pending invitations</p>
+              <button 
+                onClick={() => setShowInviteModal(true)}
+                className="mt-4 text-[#62ac4a] hover:text-[#4e8a3a] font-medium"
+              >
+                Send your first invite
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px]">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50/50">
+                    <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase">Email</th>
+                    <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase">Role</th>
+                    <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase">Invited By</th>
+                    <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase">Expires</th>
+                    <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {invites.filter(i => i.status === "pending").map((invite) => (
+                    <tr key={invite.id} className="hover:bg-gray-50">
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-2">
+                          <Mail className="w-4 h-4 text-gray-400" />
+                          <span className="font-medium text-gray-900">{invite.email}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4">
+                        <RoleBadge role={invite.role} />
+                      </td>
+                      <td className="py-4 px-4 text-sm text-gray-600">
+                        {invite.invitedByName || invite.invitedByEmail}
+                      </td>
+                      <td className="py-4 px-4">
+                        <span className="inline-flex items-center gap-1.5 text-sm text-gray-600">
+                          <Clock className="w-4 h-4" />
+                          {new Date(invite.expiresAt).toLocaleDateString()}
+                        </span>
+                      </td>
+                      <td className="py-4 px-4">
+                        <button
+                          onClick={() => revokeInvite(invite.id)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Revoke
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Invite Modal */}
+      {showInviteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">Invite New User</h3>
+              <button
+                onClick={() => {
+                  setShowInviteModal(false);
+                  setInviteEmail("");
+                  setInviteRole("user");
+                }}
+                disabled={creatingInvite}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={createInvite} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  required
+                  disabled={creatingInvite}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#62ac4a] focus:border-transparent disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Role
+                </label>
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value)}
+                  disabled={creatingInvite}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#62ac4a] focus:border-transparent disabled:opacity-50"
+                >
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.name} - {role.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteEmail("");
+                    setInviteRole("user");
+                  }}
+                  disabled={creatingInvite}
+                  className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingInvite || !inviteEmail.trim()}
+                  className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-[#62ac4a] rounded-lg hover:bg-[#4e8a3a] transition disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {creatingInvite ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      Send Invite
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Role Modal */}
       {showRoleModal && selectedUser && (

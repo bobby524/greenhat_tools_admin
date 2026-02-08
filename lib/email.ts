@@ -1,6 +1,17 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Lazy initialization to avoid build-time errors
+let resendInstance: Resend | null = null;
+function getResend() {
+  if (!resendInstance) {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      throw new Error("RESEND_API_KEY environment variable is not set");
+    }
+    resendInstance = new Resend(apiKey);
+  }
+  return resendInstance;
+}
 
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "noreply@greenhatsec.com";
 const BASE_URL = process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com";
@@ -19,7 +30,7 @@ export async function sendInviteEmail(data: InviteEmailData): Promise<{ success:
   try {
     const inviteUrl = `${BASE_URL}/invite?token=${data.token}`;
     
-    const { error } = await resend.emails.send({
+    const { error } = await getResend().emails.send({
       from: `Greenhat Tools <${FROM_EMAIL}>`,
       to: data.email,
       subject: "You've been invited to Greenhat Tools",
