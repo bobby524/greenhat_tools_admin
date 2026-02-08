@@ -1,129 +1,159 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import AdminLayout from "../components/AdminLayout";
 import { 
   Users, 
-  BarChart3, 
-  RefreshCw, 
-  Settings, 
-  Mail, 
-  Database,
-  ArrowRight,
-  Construction,
-  CheckCircle2,
-  Clock,
-  Circle
+  Building2, 
+  Briefcase, 
+  CheckCircle,
+  Plus,
+  Search,
+  Loader2,
+  Mail,
+  Phone
 } from "lucide-react";
 
-export default function CRMAdminModule() {
+interface Contact {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  company_name: string | null;
+  lifecycle_stage: string;
+  created_at: string;
+}
+
+interface Company {
+  id: string;
+  name: string;
+  domain: string | null;
+  industry: string | null;
+  size: string | null;
+  created_at: string;
+}
+
+export default function CRMPage() {
+  const [activeTab, setActiveTab] = useState<"contacts" | "companies">("contacts");
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    if (activeTab === "contacts") {
+      fetchContacts();
+    } else {
+      fetchCompanies();
+    }
+  }, [activeTab, search]);
+
+  async function fetchContacts() {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/crm/contacts?search=${encodeURIComponent(search)}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch contacts");
+      const data = await response.json();
+      setContacts(data.contacts || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error loading contacts");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function fetchCompanies() {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/crm/companies?search=${encodeURIComponent(search)}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch companies");
+      const data = await response.json();
+      setCompanies(data.companies || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error loading companies");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <AdminLayout title="CRM Admin">
-      {/* Coming Soon Banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#41734a] to-[#62ac4a] p-8 mb-8">
-        <div className="absolute top-0 right-0 -mt-8 -mr-8 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
-        <div className="absolute bottom-0 left-0 -mb-8 -ml-8 w-24 h-24 bg-white/10 rounded-full blur-xl" />
-        <div className="relative flex items-start gap-4">
-          <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
-            <Construction className="w-7 h-7 text-white" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-white mb-2">Coming Soon</h2>
-            <p className="text-white/90 text-lg">
-              The CRM Admin module is currently being migrated from tools.greenhatsec.com
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Feature Preview Grid */}
-      <div className="mb-8">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Planned Features</h3>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <FeatureCard
-            icon={Users}
-            title="User Management"
-            description="Manage CRM users, roles, and permissions with granular access controls"
-          />
-          <FeatureCard
-            icon={BarChart3}
-            title="Analytics Dashboard"
-            description="View CRM metrics, performance analytics, and custom reports"
-          />
-          <FeatureCard
-            icon={RefreshCw}
-            title="Data Sync"
-            description="Configure data synchronization settings and integration workflows"
-          />
-          <FeatureCard
-            icon={Settings}
-            title="System Settings"
-            description="Manage CRM configuration, preferences, and global options"
-          />
-          <FeatureCard
-            icon={Mail}
-            title="Email Templates"
-            description="Customize email templates and notification preferences"
-          />
-          <FeatureCard
-            icon={Database}
-            title="Custom Fields"
-            description="Manage custom fields, data structures, and field mappings"
-          />
-        </div>
-      </div>
-
-      {/* Current Location Card */}
-      <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-8">
+    <AdminLayout title="CRM">
+      <div className="space-y-6">
+        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
-              <ArrowRight className="w-6 h-6 text-[#41734a]" />
-            </div>
-            <div>
-              <h4 className="text-lg font-semibold text-gray-900">Looking for CRM Admin?</h4>
-              <p className="text-gray-600 mt-1">
-                The admin settings are currently located at tools.greenhatsec.com
-              </p>
-            </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">CRM</h1>
+            <p className="text-gray-600 mt-1">Manage your contacts and companies</p>
           </div>
-          <a
-            href="https://tools.greenhatsec.com/admin"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium whitespace-nowrap"
-          >
-            Go to CRM Admin
-            <ArrowRight className="w-4 h-4" />
-          </a>
+          <button className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium">
+            <Plus className="w-4 h-4" />
+            Add {activeTab === "contacts" ? "Contact" : "Company"}
+          </button>
         </div>
-      </div>
 
-      {/* Migration Progress */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200">
-          <h4 className="text-lg font-semibold text-gray-900">Migration Progress</h4>
+        {/* Stats */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard title="Total Contacts" value="-" icon={Users} loading={loading} />
+          <StatCard title="Companies" value="-" icon={Building2} loading={loading} />
+          <StatCard title="Deals" value="-" icon={Briefcase} loading={loading} />
+          <StatCard title="Tasks" value="-" icon={CheckCircle} loading={loading} />
         </div>
-        <div className="p-6">
-          {/* Overall Progress Bar */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-700">Overall Progress</span>
-              <span className="text-sm font-bold text-[#62ac4a]">25%</span>
+
+        {/* Tabs & Search */}
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex gap-2">
+              <TabButton 
+                active={activeTab === "contacts"} 
+                onClick={() => setActiveTab("contacts")}
+                icon={Users}
+                label="Contacts"
+              />
+              <TabButton 
+                active={activeTab === "companies"} 
+                onClick={() => setActiveTab("companies")}
+                icon={Building2}
+                label="Companies"
+              />
             </div>
-            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-[#62ac4a] to-[#8bcd7b] rounded-full transition-all duration-500"
-                style={{ width: "25%" }}
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder={`Search ${activeTab}...`}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#62ac4a] focus:border-transparent"
               />
             </div>
           </div>
 
-          {/* Progress Items */}
-          <div className="space-y-3">
-            <ProgressItem label="UI Components" status="completed" />
-            <ProgressItem label="API Integration" status="in-progress" />
-            <ProgressItem label="Data Migration" status="pending" />
-            <ProgressItem label="Testing & QA" status="pending" />
+          {/* Data Table */}
+          <div className="overflow-x-auto">
+            {loading ? (
+              <div className="p-12 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 animate-spin text-[#62ac4a]" />
+              </div>
+            ) : error ? (
+              <div className="p-12 text-center text-red-600">
+                <p>{error}</p>
+                <button 
+                  onClick={() => activeTab === "contacts" ? fetchContacts() : fetchCompanies()}
+                  className="mt-2 text-sm text-[#62ac4a] hover:underline"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : activeTab === "contacts" ? (
+              <ContactsTable contacts={contacts} />
+            ) : (
+              <CompaniesTable companies={companies} />
+            )}
           </div>
         </div>
       </div>
@@ -131,72 +161,149 @@ export default function CRMAdminModule() {
   );
 }
 
-function FeatureCard({
-  icon: Icon,
-  title,
-  description,
-}: {
+function StatCard({ title, value, icon: Icon, loading }: { 
+  title: string; 
+  value: string; 
   icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  description: string;
+  loading: boolean;
 }) {
   return (
-    <div className="group p-5 bg-white rounded-xl border border-gray-200 hover:border-[#62ac4a]/50 hover:shadow-lg hover:shadow-[#62ac4a]/5 transition-all duration-200">
-      <div className="w-12 h-12 bg-[#62ac4a]/10 rounded-xl flex items-center justify-center mb-4 group-hover:scale-105 transition-transform">
-        <Icon className="w-6 h-6 text-[#62ac4a]" />
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-gray-600">{title}</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">
+            {loading ? <Loader2 className="w-6 h-6 animate-spin text-[#62ac4a]" /> : value}
+          </p>
+        </div>
+        <div className="w-12 h-12 bg-[#62ac4a]/10 rounded-xl flex items-center justify-center">
+          <Icon className="w-6 h-6 text-[#62ac4a]" />
+        </div>
       </div>
-      <h4 className="text-base font-semibold text-gray-900 mb-2">{title}</h4>
-      <p className="text-sm text-gray-600 leading-relaxed">{description}</p>
     </div>
   );
 }
 
-function ProgressItem({ 
-  label, 
-  status 
-}: { 
-  label: string; 
-  status: "completed" | "in-progress" | "pending";
+function TabButton({ active, onClick, icon: Icon, label }: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
 }) {
-  const statusConfig = {
-    completed: {
-      icon: CheckCircle2,
-      color: "text-green-600",
-      bgColor: "bg-green-100",
-      borderColor: "border-green-200",
-      label: "Completed",
-      labelColor: "text-green-700",
-    },
-    "in-progress": {
-      icon: Clock,
-      color: "text-blue-600",
-      bgColor: "bg-blue-100",
-      borderColor: "border-blue-200",
-      label: "In Progress",
-      labelColor: "text-blue-700",
-    },
-    pending: {
-      icon: Circle,
-      color: "text-gray-400",
-      bgColor: "bg-gray-100",
-      borderColor: "border-gray-200",
-      label: "Pending",
-      labelColor: "text-gray-600",
-    },
-  };
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition ${
+        active 
+          ? "bg-[#62ac4a] text-white" 
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+      }`}
+    >
+      <Icon className="w-4 h-4" />
+      {label}
+    </button>
+  );
+}
 
-  const config = statusConfig[status];
-  const Icon = config.icon;
+function ContactsTable({ contacts }: { contacts: Contact[] }) {
+  if (contacts.length === 0) {
+    return (
+      <div className="p-12 text-center text-gray-500">
+        <Users className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+        <p className="text-lg font-medium">No contacts found</p>
+        <p className="text-sm mt-1">Add your first contact to get started</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex items-center gap-4 p-3 rounded-lg hover:bg-gray-50 transition-colors">
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${config.bgColor}`}>
-        <Icon className={`w-5 h-5 ${config.color}`} />
+    <table className="w-full">
+      <thead className="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Name</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Email</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Phone</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Company</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Stage</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-200">
+        {contacts.map((contact) => (
+          <tr key={contact.id} className="hover:bg-gray-50">
+            <td className="px-6 py-4 font-medium text-gray-900">{contact.name}</td>
+            <td className="px-6 py-4">
+              <a href={`mailto:${contact.email}`} className="text-[#62ac4a] hover:underline flex items-center gap-1">
+                <Mail className="w-4 h-4" />
+                {contact.email}
+              </a>
+            </td>
+            <td className="px-6 py-4 text-gray-600">
+              {contact.phone ? (
+                <a href={`tel:${contact.phone}`} className="flex items-center gap-1 hover:text-[#62ac4a]">
+                  <Phone className="w-4 h-4" />
+                  {contact.phone}
+                </a>
+              ) : (
+                <span className="text-gray-400">-</span>
+              )}
+            </td>
+            <td className="px-6 py-4 text-gray-600">{contact.company_name || "-"}</td>
+            <td className="px-6 py-4">
+              <span className="inline-flex px-2 py-1 text-xs font-medium rounded-full bg-[#62ac4a]/10 text-[#41734a]">
+                {contact.lifecycle_stage}
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function CompaniesTable({ companies }: { companies: Company[] }) {
+  if (companies.length === 0) {
+    return (
+      <div className="p-12 text-center text-gray-500">
+        <Building2 className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+        <p className="text-lg font-medium">No companies found</p>
+        <p className="text-sm mt-1">Add your first company to get started</p>
       </div>
-      <span className="flex-1 font-medium text-gray-900">{label}</span>
-      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${config.borderColor} ${config.labelColor}`}>
-        {config.label}
-      </span>
-    </div>
+    );
+  }
+
+  return (
+    <table className="w-full">
+      <thead className="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Name</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Domain</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Industry</th>
+          <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Size</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-200">
+        {companies.map((company) => (
+          <tr key={company.id} className="hover:bg-gray-50">
+            <td className="px-6 py-4 font-medium text-gray-900">{company.name}</td>
+            <td className="px-6 py-4">
+              {company.domain ? (
+                <a 
+                  href={`https://${company.domain}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-[#62ac4a] hover:underline"
+                >
+                  {company.domain}
+                </a>
+              ) : (
+                <span className="text-gray-400">-</span>
+              )}
+            </td>
+            <td className="px-6 py-4 text-gray-600">{company.industry || "-"}</td>
+            <td className="px-6 py-4 text-gray-600">{company.size || "-"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
