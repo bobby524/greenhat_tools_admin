@@ -325,14 +325,9 @@ export async function DELETE(request: NextRequest) {
 
     const client = await pool.connect();
     try {
-      // Mark as used (effectively revoking it)
+      // Delete the invite (revoke it)
       const result = await client.query(
-        `
-        UPDATE invites
-        SET "usedAt" = NOW()
-        WHERE id = $1 AND "usedAt" IS NULL
-        RETURNING *
-        `,
+        `DELETE FROM invites WHERE id = $1 AND "usedAt" IS NULL RETURNING *`,
         [inviteId]
       );
 
