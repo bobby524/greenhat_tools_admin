@@ -2,6 +2,19 @@
 
 import { useEffect, useState, useCallback } from "react";
 import AdminLayout from "../components/AdminLayout";
+import { 
+  Shield, 
+  Activity, 
+  AlertTriangle, 
+  CheckCircle, 
+  XCircle, 
+  RefreshCw,
+  Clock,
+  Lock,
+  Globe,
+  Edit3,
+  AlertOctagon
+} from "lucide-react";
 
 interface AuditLog {
   id: string;
@@ -77,7 +90,6 @@ export default function MCPFirewallModule() {
   useEffect(() => {
     fetchData();
     
-    // Auto-refresh every 5 seconds
     let interval: NodeJS.Timeout;
     if (autoRefresh) {
       interval = setInterval(fetchData, 5000);
@@ -91,11 +103,10 @@ export default function MCPFirewallModule() {
   if (loading) {
     return (
       <AdminLayout title="MCP Firewall">
-        <div style={{ padding: "40px", textAlign: "center" }}>
-          <div>Loading firewall data...</div>
-          <div style={{ marginTop: "10px", fontSize: "0.875rem", color: "#6b7280" }}>
-            Connecting to MCP server...
-          </div>
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="w-8 h-8 border-2 border-gray-300 border-t-[#62ac4a] rounded-full animate-spin mb-4" />
+          <p className="text-gray-600">Loading firewall data...</p>
+          <p className="text-sm text-gray-400 mt-1">Connecting to MCP server...</p>
         </div>
       </AdminLayout>
     );
@@ -104,21 +115,17 @@ export default function MCPFirewallModule() {
   if (error) {
     return (
       <AdminLayout title="MCP Firewall">
-        <div style={{ padding: "40px", textAlign: "center", color: "#dc2626" }}>
-          <h3>Error Loading Data</h3>
-          <p>{error}</p>
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center mb-4">
+            <XCircle className="w-6 h-6 text-red-600" />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Error Loading Data</h3>
+          <p className="text-gray-600 mb-6">{error}</p>
           <button
             onClick={fetchData}
-            style={{
-              marginTop: "20px",
-              padding: "10px 20px",
-              background: "#2563eb",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-            }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium"
           >
+            <RefreshCw className="w-4 h-4" />
             Retry
           </button>
         </div>
@@ -129,7 +136,7 @@ export default function MCPFirewallModule() {
   if (!status) {
     return (
       <AdminLayout title="MCP Firewall">
-        <div style={{ padding: "40px", textAlign: "center" }}>
+        <div className="flex items-center justify-center min-h-[400px] text-gray-500">
           No data available
         </div>
       </AdminLayout>
@@ -143,156 +150,222 @@ export default function MCPFirewallModule() {
 
   return (
     <AdminLayout title="MCP Firewall Status">
-      {/* Header with Auto-refresh Toggle */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <div>
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "6px 12px",
-              borderRadius: "20px",
-              fontSize: "0.875rem",
-              fontWeight: "bold",
-              background: status.firewall.enabled ? "#dcfce7" : "#fee2e2",
-              color: status.firewall.enabled ? "#166534" : "#991b1b",
-            }}
-          >
-            <span>{status.firewall.enabled ? "🟢" : "🔴"}</span>
+      {/* Header with Status */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold ${
+            status.firewall.enabled 
+              ? "bg-green-100 text-green-800 border border-green-200" 
+              : "bg-red-100 text-red-800 border border-red-200"
+          }`}>
+            {status.firewall.enabled ? (
+              <CheckCircle className="w-4 h-4" />
+            ) : (
+              <XCircle className="w-4 h-4" />
+            )}
             Firewall {status.firewall.enabled ? "Enabled" : "Disabled"}
           </span>
-          <span style={{ marginLeft: "10px", fontSize: "0.875rem", color: "#6b7280" }}>
-            Risk Level: 
-            <RiskBadge level={status.riskLevel} />
+          <span className="text-sm text-gray-500">
+            Risk Level: <RiskBadge level={status.riskLevel} />
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.875rem", cursor: "pointer" }}>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
             <input
               type="checkbox"
               checked={autoRefresh}
               onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-[#62ac4a] focus:ring-[#62ac4a]"
             />
             Auto-refresh
           </label>
           <button
             onClick={fetchData}
-            style={{
-              padding: "6px 12px",
-              background: "#f3f4f6",
-              border: "1px solid #d1d5db",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "0.875rem",
-            }}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
           >
-            🔄 Refresh
+            <RefreshCw className="w-4 h-4" />
+            Refresh
           </button>
         </div>
       </div>
 
-      {/* Overview Cards */}
-      <div style={{ display: "grid", gap: "20px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: "30px" }}>
-        <MetricCard title="Total Tool Calls" value={totalCalls} color="#3b82f6" />
-        <MetricCard title="Errors" value={totalErrors} color="#ef4444" />
-        <MetricCard title="Blocked" value={totalBlocked} color="#f59e0b" />
-        <MetricCard title="Active Sessions" value={uniqueSessions} color="#8b5cf6" />
+      {/* Metric Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <MetricCard 
+          title="Total Tool Calls" 
+          value={totalCalls} 
+          icon={Activity}
+          color="#3b82f6"
+        />
+        <MetricCard 
+          title="Errors" 
+          value={totalErrors} 
+          icon={XCircle}
+          color="#ef4444"
+        />
+        <MetricCard 
+          title="Blocked" 
+          value={totalBlocked} 
+          icon={Shield}
+          color="#f59e0b"
+        />
+        <MetricCard 
+          title="Active Sessions" 
+          value={uniqueSessions} 
+          icon={Globe}
+          color="#8b5cf6"
+        />
       </div>
 
       {/* Firewall Configuration */}
-      <Section title="Firewall Configuration">
-        <div style={{ display: "grid", gap: "15px", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))" }}>
+      <Section title="Firewall Configuration" icon={Shield}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <ConfigItem label="Default Policy" value={status.firewall.defaultPolicy} />
           <ConfigItem label="Tools Configured" value={status.firewall.toolsConfigured.toString()} />
           <ConfigItem label="Blocked Sessions" value={status.firewall.blockedSessions.toString()} />
-          <ConfigItem label="Data Leak Prevention" value={status.firewall.dataLeakPrevention ? "✓ Enabled" : "✗ Disabled"} />
-          <ConfigItem label="Lethal Trifecta Protection" value={status.firewall.lethalTrifectaProtection ? "✓ Enabled" : "✗ Disabled"} />
+          <ConfigItem 
+            label="Data Leak Prevention" 
+            value={status.firewall.dataLeakPrevention ? "Enabled" : "Disabled"}
+            status={status.firewall.dataLeakPrevention ? "success" : "error"}
+          />
+          <ConfigItem 
+            label="Lethal Trifecta Protection" 
+            value={status.firewall.lethalTrifectaProtection ? "Enabled" : "Disabled"}
+            status={status.firewall.lethalTrifectaProtection ? "success" : "error"}
+          />
         </div>
       </Section>
 
       {/* Active Sessions */}
-      <Section title="Active Sessions">
+      <Section title="Active Sessions" icon={Globe}>
         {status.allSessions.length === 0 ? (
-          <p style={{ color: "#6b7280" }}>No active sessions</p>
+          <div className="text-center py-12 text-gray-500">
+            <Globe className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p>No active sessions</p>
+          </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#f9fafb", textAlign: "left" }}>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Session ID</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Started</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Tool Calls</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Errors</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Blocked</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>ACL Level</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Risk</th>
-              </tr>
-            </thead>
-            <tbody>
-              {status.allSessions.map((session) => (
-                <tr key={session.sessionId}>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", fontFamily: "monospace", fontSize: "0.75rem" }}>
-                    {session.sessionId.substring(0, 8)}...
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", fontSize: "0.875rem" }}>
-                    {new Date(session.startTime).toLocaleTimeString()}
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>{session.toolCalls}</td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: session.errors > 0 ? "#dc2626" : "inherit" }}>
-                    {session.errors}
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: session.blocked > 0 ? "#f59e0b" : "inherit" }}>
-                    {session.blocked}
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    <AclBadge level={session.maxAclLevel} />
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    {session.lethalTrifecta ? <span style={{ color: "#dc2626", fontWeight: "bold" }}>⚠️ HIGH</span> : "✓ Normal"}
-                  </td>
+          <div className="overflow-x-auto -mx-6">
+            <table className="w-full min-w-[700px]">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-left py-3 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">Session ID</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Started</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Calls</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Errors</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Blocked</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">ACL</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Risk</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {status.allSessions.map((session) => (
+                  <tr key={session.sessionId} className="hover:bg-gray-50 transition-colors">
+                    <td className="py-3 px-6">
+                      <code className="text-xs font-mono text-gray-600 bg-gray-100 px-2 py-1 rounded">
+                        {session.sessionId.substring(0, 8)}...
+                      </code>
+                    </td>
+                    <td className="py-3 px-4 text-sm text-gray-600">
+                      {new Date(session.startTime).toLocaleTimeString()}
+                    </td>
+                    <td className="py-3 px-4 text-sm font-medium text-gray-900">
+                      {session.toolCalls}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className={`text-sm font-medium ${session.errors > 0 ? "text-red-600" : "text-gray-600"}`}>
+                        {session.errors}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className={`text-sm font-medium ${session.blocked > 0 ? "text-amber-600" : "text-gray-600"}`}>
+                        {session.blocked}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <AclBadge level={session.maxAclLevel} />
+                    </td>
+                    <td className="py-3 px-4">
+                      {session.lethalTrifecta ? (
+                        <span className="inline-flex items-center gap-1 text-red-600 font-semibold text-sm">
+                          <AlertOctagon className="w-4 h-4" />
+                          HIGH
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-green-600 font-medium text-sm">
+                          <CheckCircle className="w-4 h-4" />
+                          Normal
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Section>
 
       {/* Recent Audit Logs */}
-      <Section title="Recent Activity">
+      <Section title="Recent Activity" icon={Activity}>
         {status.recentLogs.length === 0 ? (
-          <p style={{ color: "#6b7280" }}>No recent activity</p>
+          <div className="text-center py-12 text-gray-500">
+            <Activity className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p>No recent activity</p>
+          </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div className="space-y-3">
             {status.recentLogs.slice(0, 20).map((log) => (
               <div
                 key={log.id}
-                style={{
-                  padding: "12px 16px",
-                  background: log.result === "blocked" ? "#fef2f2" : log.result === "error" ? "#fffbeb" : "#f0fdf4",
-                  borderRadius: "8px",
-                  border: `1px solid ${log.result === "blocked" ? "#fecaca" : log.result === "error" ? "#fcd34d" : "#bbf7d0"}`,
-                }}
+                className={`p-4 rounded-xl border ${
+                  log.result === "blocked" 
+                    ? "bg-red-50 border-red-200" 
+                    : log.result === "error" 
+                    ? "bg-amber-50 border-amber-200" 
+                    : "bg-green-50 border-green-200"
+                }`}
               >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span style={{ fontWeight: "bold" }}>{log.toolName}</span>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-gray-900">{log.toolName}</span>
                     <ResultBadge result={log.result} />
                     <AclBadge level={log.aclLevel} />
                   </div>
-                  <span style={{ fontSize: "0.75rem", color: "#6b7280" }}>
+                  <span className="text-xs text-gray-500 flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
                     {new Date(log.timestamp).toLocaleString()}
                   </span>
                 </div>
-                <div style={{ display: "flex", gap: "10px", fontSize: "0.875rem", color: "#4b5563" }}>
-                  <span>Session: {log.sessionId.substring(0, 8)}...</span>
-                  <span>Duration: {log.durationMs}ms</span>
-                  {log.riskFlags.writeOperation && <span style={{ color: "#dc2626" }}>✏️ Write</span>}
-                  {log.riskFlags.readPrivateData && <span style={{ color: "#f59e0b" }}>🔒 Private Data</span>}
-                  {log.riskFlags.externalCommunication && <span style={{ color: "#8b5cf6" }}>🌐 External</span>}
+                <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+                  <span className="font-mono text-xs bg-white px-2 py-1 rounded border">
+                    {log.sessionId.substring(0, 8)}...
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {log.durationMs}ms
+                  </span>
+                  {log.riskFlags.writeOperation && (
+                    <span className="inline-flex items-center gap-1 text-amber-600">
+                      <Edit3 className="w-3 h-3" />
+                      Write
+                    </span>
+                  )}
+                  {log.riskFlags.readPrivateData && (
+                    <span className="inline-flex items-center gap-1 text-amber-600">
+                      <Lock className="w-3 h-3" />
+                      Private Data
+                    </span>
+                  )}
+                  {log.riskFlags.externalCommunication && (
+                    <span className="inline-flex items-center gap-1 text-purple-600">
+                      <Globe className="w-3 h-3" />
+                      External
+                    </span>
+                  )}
                 </div>
                 {log.error && (
-                  <div style={{ marginTop: "8px", padding: "8px", background: "#fee2e2", borderRadius: "4px", fontSize: "0.75rem", color: "#991b1b" }}>
-                    Error: {log.error}
+                  <div className="mt-3 p-3 bg-red-100 rounded-lg text-sm text-red-800">
+                    <span className="font-semibold">Error:</span> {log.error}
                   </div>
                 )}
               </div>
@@ -303,20 +376,15 @@ export default function MCPFirewallModule() {
 
       {/* Alerts */}
       {status.alerts.length > 0 && (
-        <Section title="Security Alerts">
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        <Section title="Security Alerts" icon={AlertTriangle}>
+          <div className="space-y-3">
             {status.alerts.map((alert, index) => (
               <div
                 key={index}
-                style={{
-                  padding: "12px 16px",
-                  background: "#fef2f2",
-                  borderRadius: "8px",
-                  border: "1px solid #fecaca",
-                  color: "#991b1b",
-                }}
+                className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl"
               >
-                ⚠️ {alert}
+                <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <p className="text-red-800 text-sm">{alert}</p>
               </div>
             ))}
           </div>
@@ -326,107 +394,116 @@ export default function MCPFirewallModule() {
   );
 }
 
-function MetricCard({ title, value, color }: { title: string; value: number; color: string }) {
+function MetricCard({ 
+  title, 
+  value, 
+  icon: Icon,
+  color 
+}: { 
+  title: string; 
+  value: number; 
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+}) {
   return (
-    <div style={{ padding: "20px", background: "white", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
-      <p style={{ margin: "0 0 8px", color: "#6b7280", fontSize: "0.875rem" }}>{title}</p>
-      <p style={{ margin: 0, fontSize: "2rem", fontWeight: "bold", color }}>{value.toLocaleString()}</p>
+    <div className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-medium text-gray-600">{title}</p>
+        <div 
+          className="w-10 h-10 rounded-lg flex items-center justify-center"
+          style={{ backgroundColor: `${color}15` }}
+        >
+          <div style={{ color }}><Icon className="w-5 h-5" /></div>
+        </div>
+      </div>
+      <p className="text-3xl font-bold text-gray-900">{value.toLocaleString()}</p>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ 
+  title, 
+  icon: Icon,
+  children 
+}: { 
+  title: string; 
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
   return (
-    <div style={{ marginBottom: "30px", padding: "20px", background: "white", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
-      <h3 style={{ margin: "0 0 20px", fontSize: "1.125rem" }}>{title}</h3>
-      {children}
+    <div className="mb-8 bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-200 bg-gray-50/50">
+        <Icon className="w-5 h-5 text-[#62ac4a]" />
+        <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+      </div>
+      <div className="p-6">
+        {children}
+      </div>
     </div>
   );
 }
 
-function ConfigItem({ label, value }: { label: string; value: string }) {
+function ConfigItem({ 
+  label, 
+  value,
+  status
+}: { 
+  label: string; 
+  value: string;
+  status?: "success" | "error";
+}) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "#f9fafb", borderRadius: "6px" }}>
-      <span style={{ color: "#6b7280" }}>{label}</span>
-      <span style={{ fontWeight: "bold" }}>{value}</span>
+    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+      <span className="text-sm text-gray-600">{label}</span>
+      <span className={`text-sm font-semibold ${
+        status === "success" ? "text-green-600" : 
+        status === "error" ? "text-red-600" : 
+        "text-gray-900"
+      }`}>
+        {value}
+      </span>
     </div>
   );
 }
 
 function RiskBadge({ level }: { level: "low" | "medium" | "high" | "critical" }) {
-  const colors = {
-    low: { bg: "#dcfce7", color: "#166534" },
-    medium: { bg: "#fef3c7", color: "#92400e" },
-    high: { bg: "#fee2e2", color: "#991b1b" },
-    critical: { bg: "#fecaca", color: "#7f1d1d" },
+  const styles = {
+    low: "bg-green-100 text-green-800 border-green-200",
+    medium: "bg-amber-100 text-amber-800 border-amber-200",
+    high: "bg-orange-100 text-orange-800 border-orange-200",
+    critical: "bg-red-100 text-red-800 border-red-200",
   };
 
-  const { bg, color } = colors[level] || colors.low;
-
   return (
-    <span
-      style={{
-        marginLeft: "5px",
-        padding: "2px 8px",
-        borderRadius: "4px",
-        fontSize: "0.75rem",
-        fontWeight: "bold",
-        textTransform: "uppercase",
-        background: bg,
-        color: color,
-      }}
-    >
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${styles[level]}`}>
       {level}
     </span>
   );
 }
 
 function AclBadge({ level }: { level: "PUBLIC" | "PRIVATE" | "SECRET" }) {
-  const colors = {
-    PUBLIC: { bg: "#dcfce7", color: "#166534" },
-    PRIVATE: { bg: "#fef3c7", color: "#92400e" },
-    SECRET: { bg: "#fee2e2", color: "#991b1b" },
+  const styles = {
+    PUBLIC: "bg-green-100 text-green-800 border-green-200",
+    PRIVATE: "bg-amber-100 text-amber-800 border-amber-200",
+    SECRET: "bg-red-100 text-red-800 border-red-200",
   };
 
-  const { bg, color } = colors[level] || colors.PUBLIC;
-
   return (
-    <span
-      style={{
-        padding: "2px 8px",
-        borderRadius: "4px",
-        fontSize: "0.625rem",
-        fontWeight: "bold",
-        background: bg,
-        color: color,
-      }}
-    >
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${styles[level]}`}>
       {level}
     </span>
   );
 }
 
 function ResultBadge({ result }: { result: "success" | "error" | "blocked" }) {
-  const colors = {
-    success: { bg: "#dcfce7", color: "#166534" },
-    error: { bg: "#fee2e2", color: "#991b1b" },
-    blocked: { bg: "#fef3c7", color: "#92400e" },
+  const styles = {
+    success: "bg-green-100 text-green-800 border-green-200",
+    error: "bg-red-100 text-red-800 border-red-200",
+    blocked: "bg-amber-100 text-amber-800 border-amber-200",
   };
 
-  const { bg, color } = colors[result] || colors.success;
-
   return (
-    <span
-      style={{
-        padding: "2px 8px",
-        borderRadius: "4px",
-        fontSize: "0.625rem",
-        fontWeight: "bold",
-        textTransform: "uppercase",
-        background: bg,
-        color: color,
-      }}
-    >
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${styles[result]}`}>
       {result}
     </span>
   );

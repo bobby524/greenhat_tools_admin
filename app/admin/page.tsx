@@ -136,7 +136,7 @@ function DashboardCard({
           className="w-12 h-12 rounded-xl flex items-center justify-center transition-transform group-hover:scale-105"
           style={{ backgroundColor: `${color}15` }}
         >
-          <Icon className="w-6 h-6" style={{ color }} />
+          <div style={{ color }}><Icon className="w-6 h-6" /></div>
         </div>
         {status === "coming-soon" && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">

@@ -2,6 +2,20 @@
 
 import { useEffect, useState } from "react";
 import AdminLayout from "../components/AdminLayout";
+import { 
+  Users, 
+  UserCheck, 
+  UserX, 
+  Mail, 
+  Shield, 
+  Edit2, 
+  X,
+  Loader2,
+  CheckCircle,
+  AlertCircle,
+  Plus,
+  Search
+} from "lucide-react";
 
 interface User {
   id: string;
@@ -51,12 +65,12 @@ export default function AccessControlsModule() {
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [updatingRole, setUpdatingRole] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     fetchUsers();
   }, []);
 
-  // Clear success message after 3 seconds
   useEffect(() => {
     if (successMessage) {
       const timer = setTimeout(() => setSuccessMessage(null), 3000);
@@ -100,7 +114,6 @@ export default function AccessControlsModule() {
 
       const data = await response.json();
 
-      // Update local state with the updated user
       setUsers(users.map((u) => (u.id === userId ? data.user : u)));
       setSuccessMessage(`Role updated successfully for ${selectedUser?.name || selectedUser?.email}`);
       setShowRoleModal(false);
@@ -113,12 +126,19 @@ export default function AccessControlsModule() {
     }
   }
 
+  const filteredUsers = users.filter(user => 
+    user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (user.name && user.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
   if (loading) {
     return (
       <AdminLayout title="Access Controls">
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "400px" }}>
-          <LoadingSpinner />
-          <span style={{ marginLeft: "12px", color: "#6b7280" }}>Loading users...</span>
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="flex items-center gap-3 text-gray-500">
+            <Loader2 className="w-6 h-6 animate-spin text-[#62ac4a]" />
+            <span>Loading users...</span>
+          </div>
         </div>
       </AdminLayout>
     );
@@ -128,51 +148,22 @@ export default function AccessControlsModule() {
     <AdminLayout title="Access Controls">
       {/* Success Message */}
       {successMessage && (
-        <div
-          style={{
-            padding: "12px 16px",
-            background: "#dcfce7",
-            border: "1px solid #86efac",
-            borderRadius: "8px",
-            marginBottom: "20px",
-            color: "#166534",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <span>✓</span>
-          {successMessage}
+        <div className="mb-6 flex items-center gap-2 p-4 bg-green-50 border border-green-200 rounded-xl text-green-800">
+          <CheckCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{successMessage}</span>
         </div>
       )}
 
       {/* Error Message */}
       {error && (
-        <div
-          style={{
-            padding: "12px 16px",
-            background: "#fee2e2",
-            border: "1px solid #fca5a5",
-            borderRadius: "8px",
-            marginBottom: "20px",
-            color: "#991b1b",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "8px",
-          }}
-        >
-          <span>⚠ {error}</span>
+        <div className="mb-6 flex items-center justify-between gap-2 p-4 bg-red-50 border border-red-200 rounded-xl text-red-800">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
           <button
             onClick={fetchUsers}
-            style={{
-              padding: "4px 12px",
-              background: "white",
-              border: "1px solid #fca5a5",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "0.875rem",
-            }}
+            className="px-3 py-1.5 text-sm font-medium bg-white border border-red-200 rounded-lg hover:bg-red-50 transition"
           >
             Retry
           </button>
@@ -180,229 +171,223 @@ export default function AccessControlsModule() {
       )}
 
       {/* Stats Overview */}
-      <div style={{ display: "grid", gap: "20px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: "30px" }}>
-        <StatCard title="Total Users" value={users.length} color="#3b82f6" />
-        <StatCard title="Admins" value={users.filter((u) => u.role === "admin").length} color="#8b5cf6" />
-        <StatCard title="Verified Emails" value={users.filter((u) => u.emailVerified).length} color="#10b981" />
-        <StatCard title="Pending Verification" value={users.filter((u) => !u.emailVerified).length} color="#f59e0b" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <StatCard 
+          title="Total Users" 
+          value={users.length} 
+          icon={Users}
+          color="#3b82f6"
+        />
+        <StatCard 
+          title="Admins" 
+          value={users.filter((u) => u.role === "admin").length} 
+          icon={Shield}
+          color="#8b5cf6"
+        />
+        <StatCard 
+          title="Verified Emails" 
+          value={users.filter((u) => u.emailVerified).length} 
+          icon={UserCheck}
+          color="#10b981"
+        />
+        <StatCard 
+          title="Pending Verification" 
+          value={users.filter((u) => !u.emailVerified).length} 
+          icon={UserX}
+          color="#f59e0b"
+        />
       </div>
 
-      {/* Users Table */}
-      <div style={{ padding: "20px", background: "white", borderRadius: "8px", border: "1px solid #e5e7eb", marginBottom: "30px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-          <h3 style={{ margin: 0 }}>Users</h3>
-          <button
-            style={{
-              padding: "8px 16px",
-              background: "#2563eb",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "0.875rem",
-            }}
-          >
-            + Invite User
-          </button>
+      {/* Users Section */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-6 border-b border-gray-200">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Users</h3>
+            <p className="text-sm text-gray-500 mt-1">Manage user roles and permissions</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search users..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#62ac4a] focus:border-transparent w-full sm:w-64"
+              />
+            </div>
+            <button className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium text-sm">
+              <Plus className="w-4 h-4" />
+              Invite User
+            </button>
+          </div>
         </div>
 
-        {users.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "40px", color: "#6b7280" }}>
-            No users found.
+        {filteredUsers.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p>No users found</p>
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#f9fafb", textAlign: "left" }}>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>User</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Role</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Status</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Joined</th>
-                <th style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                      <div
-                        style={{
-                          width: "40px",
-                          height: "40px",
-                          borderRadius: "50%",
-                          background: "#e5e7eb",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "1.25rem",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {user.image ? (
-                          <img src={user.image} alt={user.name || ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                        ) : (
-                          "👤"
-                        )}
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: "bold" }}>{user.name || "Unnamed User"}</div>
-                        <div style={{ fontSize: "0.875rem", color: "#6b7280" }}>{user.email}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    <RoleBadge role={user.role} />
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    <StatusBadge verified={user.emailVerified} />
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb", color: "#6b7280", fontSize: "0.875rem" }}>
-                    {new Date(user.createdAt).toLocaleDateString()}
-                  </td>
-                  <td style={{ padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
-                    <button
-                      onClick={() => {
-                        setSelectedUser(user);
-                        setShowRoleModal(true);
-                      }}
-                      style={{
-                        padding: "6px 12px",
-                        background: "#f3f4f6",
-                        border: "1px solid #d1d5db",
-                        borderRadius: "4px",
-                        cursor: "pointer",
-                        fontSize: "0.875rem",
-                      }}
-                    >
-                      Edit Role
-                    </button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px]">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50/50">
+                  <th className="text-left py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
+                  <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
+                  <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Joined</th>
+                  <th className="text-left py-4 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredUsers.map((user) => (
+                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="py-4 px-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#62ac4a] to-[#41734a] flex items-center justify-center text-white font-semibold flex-shrink-0">
+                          {user.image ? (
+                            <img 
+                              src={user.image} 
+                              alt={user.name || ""} 
+                              className="w-full h-full object-cover rounded-full"
+                            />
+                          ) : (
+                            (user.name || user.email).charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium text-gray-900 truncate">
+                            {user.name || "Unnamed User"}
+                          </div>
+                          <div className="text-sm text-gray-500 flex items-center gap-1">
+                            <Mail className="w-3 h-3 flex-shrink-0" />
+                            <span className="truncate">{user.email}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-4 px-4">
+                      <RoleBadge role={user.role} />
+                    </td>
+                    <td className="py-4 px-4">
+                      <StatusBadge verified={user.emailVerified} />
+                    </td>
+                    <td className="py-4 px-4 text-sm text-gray-600">
+                      {new Date(user.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="py-4 px-4">
+                      <button
+                        onClick={() => {
+                          setSelectedUser(user);
+                          setShowRoleModal(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-[#62ac4a] hover:text-[#41734a] transition"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        Edit Role
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
       {/* Roles Section */}
-      <div style={{ padding: "20px", background: "white", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
-        <h3 style={{ margin: "0 0 20px" }}>Roles & Permissions</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-          {roles.map((role) => (
-            <div
-              key={role.id}
-              style={{
-                padding: "16px",
-                background: "#f9fafb",
-                borderRadius: "8px",
-                border: "1px solid #e5e7eb",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <RoleBadge role={role.id} />
-                  <span style={{ fontSize: "0.875rem", color: "#6b7280" }}>({role.permissions.length} permissions)</span>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900">Roles & Permissions</h3>
+          <p className="text-sm text-gray-500 mt-1">Manage available roles and their permissions</p>
+        </div>
+        <div className="p-6">
+          <div className="grid gap-4">
+            {roles.map((role) => (
+              <div
+                key={role.id}
+                className="p-5 bg-gray-50 rounded-xl border border-gray-200 hover:border-[#62ac4a]/30 transition-colors"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-3">
+                    <RoleBadge role={role.id} />
+                    <span className="text-sm text-gray-500">({role.permissions.length} permissions)</span>
+                  </div>
+                  <button className="self-start sm:self-auto px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:border-[#62ac4a] transition">
+                    Edit Permissions
+                  </button>
                 </div>
-                <button
-                  style={{
-                    padding: "4px 12px",
-                    background: "transparent",
-                    border: "1px solid #d1d5db",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  Edit Permissions
-                </button>
+                <p className="text-sm text-gray-600 mb-3">{role.description}</p>
+                <div className="flex flex-wrap gap-2">
+                  {role.permissions.map((perm) => (
+                    <span
+                      key={perm}
+                      className="px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono text-gray-600"
+                    >
+                      {perm}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <p style={{ margin: 0, color: "#4b5563", fontSize: "0.875rem" }}>{role.description}</p>
-              <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "5px" }}>
-                {role.permissions.map((perm) => (
-                  <span
-                    key={perm}
-                    style={{
-                      padding: "2px 8px",
-                      background: "#e5e7eb",
-                      borderRadius: "4px",
-                      fontSize: "0.75rem",
-                      color: "#4b5563",
-                      fontFamily: "monospace",
-                    }}
-                  >
-                    {perm}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Role Modal */}
       {showRoleModal && selectedUser && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div style={{ background: "white", padding: "30px", borderRadius: "12px", minWidth: "400px", maxWidth: "500px" }}>
-            <h3 style={{ margin: "0 0 20px" }}>Change Role for {selectedUser.name || selectedUser.email}</h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "20px" }}>
-              {roles.map((role) => (
-                <button
-                  key={role.id}
-                  onClick={() => !updatingRole && updateUserRole(selectedUser.id, role.id)}
-                  disabled={updatingRole}
-                  style={{
-                    padding: "12px 16px",
-                    background: selectedUser.role === role.id ? "#eff6ff" : "white",
-                    border: selectedUser.role === role.id ? "2px solid #3b82f6" : "1px solid #e5e7eb",
-                    borderRadius: "8px",
-                    cursor: updatingRole ? "not-allowed" : "pointer",
-                    textAlign: "left",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    opacity: updatingRole ? 0.6 : 1,
-                  }}
-                >
-                  <RoleBadge role={role.id} />
-                  <div>
-                    <div style={{ fontWeight: "bold" }}>{role.name}</div>
-                    <div style={{ fontSize: "0.875rem", color: "#6b7280" }}>{role.description}</div>
-                  </div>
-                  {updatingRole && selectedUser.role !== role.id && (
-                    <LoadingSpinner size="small" style={{ marginLeft: "auto" }} />
-                  )}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Change Role for {selectedUser.name || selectedUser.email}
+              </h3>
               <button
                 onClick={() => {
                   setShowRoleModal(false);
                   setSelectedUser(null);
                 }}
                 disabled={updatingRole}
-                style={{
-                  padding: "10px 20px",
-                  background: "#f3f4f6",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: updatingRole ? "not-allowed" : "pointer",
-                  opacity: updatingRole ? 0.6 : 1,
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-3">
+              {roles.map((role) => (
+                <button
+                  key={role.id}
+                  onClick={() => !updatingRole && updateUserRole(selectedUser.id, role.id)}
+                  disabled={updatingRole}
+                  className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 text-left transition-all ${
+                    selectedUser.role === role.id
+                      ? "border-[#62ac4a] bg-[#62ac4a]/5"
+                      : "border-gray-200 hover:border-[#62ac4a]/50 hover:bg-gray-50"
+                  } ${updatingRole ? "opacity-60 cursor-not-allowed" : ""}`}
+                >
+                  <RoleBadge role={role.id} />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-gray-900">{role.name}</div>
+                    <div className="text-sm text-gray-500">{role.description}</div>
+                  </div>
+                  {selectedUser.role === role.id && (
+                    <CheckCircle className="w-5 h-5 text-[#62ac4a] flex-shrink-0" />
+                  )}
+                  {updatingRole && selectedUser.role !== role.id && (
+                    <Loader2 className="w-5 h-5 text-gray-400 animate-spin flex-shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => {
+                  setShowRoleModal(false);
+                  setSelectedUser(null);
                 }}
+                disabled={updatingRole}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -410,101 +395,86 @@ export default function AccessControlsModule() {
           </div>
         </div>
       )}
-
-      {/* Better Auth Dashboard Link */}
-      <div
-        style={{
-          marginTop: "30px",
-          padding: "20px",
-          background: "#eff6ff",
-          borderRadius: "8px",
-          border: "1px solid #bfdbfe",
-        }}
-      >
-        <h4 style={{ margin: "0 0 10px" }}>🔐 Better Auth Dashboard</h4>
-        <p style={{ margin: "0 0 10px", color: "#4b5563" }}>
-          This module is built on top of Better Auth. View the reference dashboard for more advanced features.
-        </p>
-        <a
-          href="https://github.com/better-auth-extended/dashboard"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: "#2563eb" }}
-        >
-          View Better Auth Dashboard Reference →
-        </a>
-      </div>
     </AdminLayout>
   );
 }
 
-function LoadingSpinner({ size = "normal", style = {} }: { size?: "normal" | "small"; style?: React.CSSProperties }) {
-  const sizePx = size === "small" ? 16 : 24;
+function LoadingSpinner({ size = "normal" }: { size?: "normal" | "small" }) {
+  const sizeClass = size === "small" ? "w-4 h-4" : "w-6 h-6";
   return (
-    <div
-      style={{
-        width: sizePx,
-        height: sizePx,
-        border: "3px solid #e5e7eb",
-        borderTop: "3px solid #3b82f6",
-        borderRadius: "50%",
-        animation: "spin 1s linear infinite",
-        ...style,
-      }}
-    />
+    <div className={`${sizeClass} border-2 border-gray-300 border-t-[#62ac4a] rounded-full animate-spin`} />
   );
 }
 
-function StatCard({ title, value, color }: { title: string; value: number; color: string }) {
+function StatCard({ 
+  title, 
+  value, 
+  icon: Icon,
+  color 
+}: { 
+  title: string; 
+  value: number; 
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+}) {
   return (
-    <div style={{ padding: "20px", background: "white", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
-      <p style={{ margin: "0 0 8px", color: "#6b7280", fontSize: "0.875rem" }}>{title}</p>
-      <p style={{ margin: 0, fontSize: "2rem", fontWeight: "bold", color }}>{value}</p>
+    <div className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-medium text-gray-600">{title}</p>
+        <div 
+          className="w-10 h-10 rounded-lg flex items-center justify-center"
+          style={{ backgroundColor: `${color}15` }}
+        >
+          <div style={{ color }}><Icon className="w-5 h-5" /></div>
+        </div>
+      </div>
+      <p className="text-3xl font-bold text-gray-900">{value}</p>
     </div>
   );
 }
 
 function RoleBadge({ role }: { role: string }) {
-  const colors: Record<string, { bg: string; color: string }> = {
-    admin: { bg: "#fee2e2", color: "#991b1b" },
-    user: { bg: "#dbeafe", color: "#1e40af" },
-    viewer: { bg: "#f3f4f6", color: "#4b5563" },
+  const styles: Record<string, string> = {
+    admin: "bg-purple-100 text-purple-800 border-purple-200",
+    user: "bg-blue-100 text-blue-800 border-blue-200",
+    viewer: "bg-gray-100 text-gray-800 border-gray-200",
   };
 
-  const { bg, color } = colors[role] || colors.viewer;
+  const icons: Record<string, React.ComponentType<{ className?: string }>> = {
+    admin: Shield,
+    user: UserCheck,
+    viewer: Users,
+  };
+
+  const Icon = icons[role] || Users;
+  const style = styles[role] || styles.viewer;
 
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "4px 12px",
-        borderRadius: "12px",
-        fontSize: "0.75rem",
-        fontWeight: "bold",
-        textTransform: "capitalize",
-        background: bg,
-        color: color,
-      }}
-    >
-      {role}
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${style}`}>
+      <Icon className="w-3 h-3" />
+      <span className="capitalize">{role}</span>
     </span>
   );
 }
 
 function StatusBadge({ verified }: { verified: boolean }) {
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "4px 12px",
-        borderRadius: "12px",
-        fontSize: "0.75rem",
-        fontWeight: "bold",
-        background: verified ? "#dcfce7" : "#fef3c7",
-        color: verified ? "#166534" : "#92400e",
-      }}
-    >
-      {verified ? "✓ Verified" : "○ Pending"}
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+      verified 
+        ? "bg-green-100 text-green-800 border-green-200" 
+        : "bg-amber-100 text-amber-800 border-amber-200"
+    }`}>
+      {verified ? (
+        <>
+          <CheckCircle className="w-3 h-3" />
+          Verified
+        </>
+      ) : (
+        <>
+          <AlertCircle className="w-3 h-3" />
+          Pending
+        </>
+      )}
     </span>
   );
 }
