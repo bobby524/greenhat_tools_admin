@@ -719,6 +719,39 @@ export const initialContactFields: FieldDefinition[] = [
   },
 ];
 
+export const normalizeFieldKey = (label: string): string => {
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return normalized || "field";
+};
+
+export const createUniqueFieldKey = (
+  label: string,
+  existingFields: Array<{ fieldKey: string }>
+): string => {
+  const baseKey = normalizeFieldKey(label);
+  const existingKeys = new Set(
+    existingFields.map((f) => f.fieldKey.toLowerCase())
+  );
+
+  if (!existingKeys.has(baseKey.toLowerCase())) {
+    return baseKey;
+  }
+
+  let counter = 2;
+  let newKey = `${baseKey}_${counter}`;
+  while (existingKeys.has(newKey.toLowerCase())) {
+    counter++;
+    newKey = `${baseKey}_${counter}`;
+  }
+
+  return newKey;
+};
+
 export const initialContactSections: SectionDefinition[] = [
   {
     id: "contact-overview",

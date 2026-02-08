@@ -88,11 +88,15 @@ describe('Database Utilities', () => {
       expect(pool).toBeNull();
     });
 
-    it('should create a Pool with correct configuration for Supabase', () => {
+    it('should create a Pool with correct configuration for Supabase', async () => {
       process.env.crm_POSTGRES_URL_NON_POOLING = 'postgres://user:pass@db.supabase.co:5432/db';
       
-      const { Pool } = require('pg');
-      const pool = getPool();
+      // Dynamic import after resetting modules to get fresh singleton
+      vi.resetModules();
+      const { Pool } = await import('pg');
+      const { getPool } = await import('../../lib/db');
+      
+      getPool();
       
       expect(Pool).toHaveBeenCalledWith({
         connectionString: 'postgres://user:pass@db.supabase.co:5432/db',
@@ -103,11 +107,15 @@ describe('Database Utilities', () => {
       });
     });
 
-    it('should create a Pool without SSL for local databases', () => {
+    it('should create a Pool without SSL for local databases', async () => {
       process.env.POSTGRES_URL = 'postgres://user:pass@localhost:5432/db';
       
-      const { Pool } = require('pg');
-      const pool = getPool();
+      // Dynamic import after resetting modules to get fresh singleton
+      vi.resetModules();
+      const { Pool } = await import('pg');
+      const { getPool } = await import('../../lib/db');
+      
+      getPool();
       
       expect(Pool).toHaveBeenCalledWith({
         connectionString: 'postgres://user:pass@localhost:5432/db',
