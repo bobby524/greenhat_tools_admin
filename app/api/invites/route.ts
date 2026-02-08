@@ -34,6 +34,30 @@ function getPool() {
   });
 }
 
+// Auto-migrate: ensure invites table exists
+async function ensureInvitesTable(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS invites (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email VARCHAR(255) NOT NULL,
+        token VARCHAR(255) UNIQUE NOT NULL,
+        role VARCHAR(50) NOT NULL DEFAULT 'user',
+        "invitedBy" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+        "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
+        "usedAt" TIMESTAMP WITH TIME ZONE,
+        "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_invites_token ON invites(token);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_invites_invited_by ON invites("invitedBy");`);
+  } finally {
+    client.release();
+  }
+}
+
 // Session cookie check
 function getSessionCookie(request: NextRequest): string | null {
   const names = [
@@ -103,6 +127,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    await ensureInvitesTable(pool);
     const client = await pool.connect();
     try {
       const result = await client.query(`
@@ -171,6 +196,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    await ensureInvitesTable(pool);
     const body = await request.json();
     const { email, role = "user" } = body;
 
@@ -313,6 +339,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
+    await ensureInvitesTable(pool);
     const { searchParams } = new URL(request.url);
     const inviteId = searchParams.get("id");
 
