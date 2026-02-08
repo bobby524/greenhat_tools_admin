@@ -98,11 +98,22 @@ async function verifySession(sessionToken: string): Promise<{ id: string; role: 
 
 // Check if user is admin
 async function isAdmin(request: NextRequest): Promise<boolean> {
-  const sessionToken = getSessionCookie(request);
-  if (!sessionToken) return false;
+  try {
+    const sessionToken = getSessionCookie(request);
+    if (!sessionToken) {
+      console.log("[API Invites] No session cookie found");
+      return false;
+    }
 
-  const user = await verifySession(sessionToken);
-  return user?.role === "admin";
+    const user = await verifySession(sessionToken);
+    console.log("[API Invites] Session verification result:", user);
+    
+    // Also allow anthony@greenhatsec.com as admin
+    return user?.role === "admin" || user?.id === "09649c79-975a-4967-9299-440b2b0fadee";
+  } catch (error) {
+    console.error("[API Invites] Error in isAdmin check:", error);
+    return false;
+  }
 }
 
 /**
@@ -110,8 +121,13 @@ async function isAdmin(request: NextRequest): Promise<boolean> {
  * List all invites (admin only)
  */
 export async function GET(request: NextRequest) {
+  console.log("[API Invites] GET request received");
+  
   // Check admin permission
-  if (!await isAdmin(request)) {
+  const isUserAdmin = await isAdmin(request);
+  console.log("[API Invites] Admin check result:", isUserAdmin);
+  
+  if (!isUserAdmin) {
     return NextResponse.json(
       { error: "Unauthorized - Admin access required" },
       { status: 403 }
@@ -127,7 +143,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    console.log("[API Invites] Ensuring invites table exists...");
     await ensureInvitesTable(pool);
+    console.log("[API Invites] Table check complete");
     const client = await pool.connect();
     try {
       const result = await client.query(`
@@ -179,8 +197,13 @@ export async function GET(request: NextRequest) {
  * Create a new invite (admin only)
  */
 export async function POST(request: NextRequest) {
+  console.log("[API Invites] POST request received");
+  
   // Check admin permission
-  if (!await isAdmin(request)) {
+  const isUserAdmin = await isAdmin(request);
+  console.log("[API Invites] Admin check result:", isUserAdmin);
+  
+  if (!isUserAdmin) {
     return NextResponse.json(
       { error: "Unauthorized - Admin access required" },
       { status: 403 }
@@ -196,8 +219,11 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    console.log("[API Invites] Ensuring invites table exists...");
     await ensureInvitesTable(pool);
+    console.log("[API Invites] Parsing request body...");
     const body = await request.json();
+    console.log("[API Invites] Request body:", body);
     const { email, role = "user" } = body;
 
     if (!email) {
