@@ -67,8 +67,13 @@ function getSessionCookie(request: NextRequest): string | null {
     "greenhat_tools.session_token",
   ];
   
+  // Debug: log all cookies
+  const allCookies = Array.from(request.cookies.getAll());
+  console.log("[API Invites] All cookies:", allCookies.map(c => c.name));
+  
   for (const name of cookieNames) {
     const cookie = request.cookies.get(name);
+    console.log(`[API Invites] Checking cookie "${name}":`, cookie ? `found (len=${cookie.value.length})` : "not found");
     if (cookie?.value) return cookie.value;
   }
   return null;
@@ -77,11 +82,16 @@ function getSessionCookie(request: NextRequest): string | null {
 // Verify session and get user info by querying the database directly
 async function verifySession(sessionToken: string): Promise<{ id: string; email: string; role: string; name: string | null } | null> {
   const pool = getPool();
-  if (!pool) return null;
+  if (!pool) {
+    console.log("[API Invites] verifySession: No pool available");
+    return null;
+  }
 
   const client = await pool.connect();
   try {
     // Better Auth stores sessions with token field and expiresAt
+    console.log("[API Invites] Querying session with token:", sessionToken.substring(0, 20) + "...");
+    
     const result = await client.query(
       `
       SELECT u.id, u.email, u.role, u.name
@@ -92,6 +102,11 @@ async function verifySession(sessionToken: string): Promise<{ id: string; email:
       [sessionToken]
     );
 
+    console.log("[API Invites] Session query returned", result.rows.length, "rows");
+    if (result.rows.length > 0) {
+      console.log("[API Invites] Found user:", result.rows[0].email, "role:", result.rows[0].role);
+    }
+    
     if (result.rows.length === 0) return null;
     return result.rows[0];
   } catch (error) {
@@ -105,16 +120,25 @@ async function verifySession(sessionToken: string): Promise<{ id: string; email:
 // Check if user is admin
 async function isAdmin(request: NextRequest): Promise<boolean> {
   try {
+    console.log("[API Invites] isAdmin check started");
     const sessionToken = getSessionCookie(request);
     if (!sessionToken) {
+      console.log("[API Invites] isAdmin: No session token found");
       return false;
     }
 
     const user = await verifySession(sessionToken);
-    if (!user) return false;
+    if (!user) {
+      console.log("[API Invites] isAdmin: Session verification failed");
+      return false;
+    }
+    
+    console.log("[API Invites] isAdmin: User found:", user.email, "role:", user.role);
     
     // Check if user is admin by role or is the hardcoded admin user
-    return user.role === "admin" || user.id === "09649c79-975a-4967-9299-440b2b0fadee";
+    const isUserAdmin = user.role === "admin" || user.id === "09649c79-975a-4967-9299-440b2b0fadee";
+    console.log("[API Invites] isAdmin result:", isUserAdmin);
+    return isUserAdmin;
   } catch (error) {
     console.error("[API Invites] Error in isAdmin check:", error);
     return false;
