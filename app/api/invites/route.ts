@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Pool } from "pg";
 import { sendInviteEmail } from "@/lib/email";
 import { randomUUID } from "crypto";
+import { headers } from "next/headers";
 
 // Workaround for SSL certificate issues in some environments
 if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
@@ -58,47 +59,39 @@ async function ensureInvitesTable(pool: Pool): Promise<void> {
   }
 }
 
-// Session cookie check - try all possible cookie names
+// Session cookie check
 function getSessionCookie(request: NextRequest): string | null {
-  const names = [
+  // Better Auth cookie names based on config
+  const cookieNames = [
     "__Secure-greenhat_tools.session_token",
     "greenhat_tools.session_token",
-    "__Host-greenhat_tools.session_token",
   ];
   
-  console.log("[API Invites] Checking cookies. All cookies:", Array.from(request.cookies.getAll()).map(c => c.name));
-  
-  for (const name of names) {
+  for (const name of cookieNames) {
     const cookie = request.cookies.get(name);
-    console.log(`[API Invites] Checking cookie "${name}":`, cookie ? "found" : "not found");
-    if (cookie?.value) {
-      console.log(`[API Invites] Found session cookie: ${name.substring(0, 30)}...`);
-      return cookie.value;
-    }
+    if (cookie?.value) return cookie.value;
   }
   return null;
 }
 
-// Verify session and get user info
-async function verifySession(sessionToken: string): Promise<{ id: string; role: string } | null> {
+// Verify session and get user info by querying the database directly
+async function verifySession(sessionToken: string): Promise<{ id: string; email: string; role: string; name: string | null } | null> {
   const pool = getPool();
   if (!pool) return null;
 
   const client = await pool.connect();
   try {
-    // Query the session and user - check both expires and expiresAt column names
+    // Better Auth stores sessions with token field and expiresAt
     const result = await client.query(
       `
-      SELECT u.id, u.role, s.expires, s."expiresAt"
+      SELECT u.id, u.email, u.role, u.name
       FROM "session" s
       JOIN "user" u ON s."userId" = u.id
-      WHERE s.token = $1 
-      AND (s.expires > NOW() OR s."expiresAt" > NOW())
+      WHERE s.token = $1 AND s."expiresAt" > NOW()
       `,
       [sessionToken]
     );
 
-    console.log("[API Invites] Session query result rows:", result.rows.length);
     if (result.rows.length === 0) return null;
     return result.rows[0];
   } catch (error) {
@@ -114,19 +107,25 @@ async function isAdmin(request: NextRequest): Promise<boolean> {
   try {
     const sessionToken = getSessionCookie(request);
     if (!sessionToken) {
-      console.log("[API Invites] No session cookie found");
       return false;
     }
 
     const user = await verifySession(sessionToken);
-    console.log("[API Invites] Session verification result:", user);
+    if (!user) return false;
     
-    // Also allow anthony@greenhatsec.com as admin
-    return user?.role === "admin" || user?.id === "09649c79-975a-4967-9299-440b2b0fadee";
+    // Check if user is admin by role or is the hardcoded admin user
+    return user.role === "admin" || user.id === "09649c79-975a-4967-9299-440b2b0fadee";
   } catch (error) {
     console.error("[API Invites] Error in isAdmin check:", error);
     return false;
   }
+}
+
+// Get current user from session
+async function getCurrentUser(request: NextRequest) {
+  const sessionToken = getSessionCookie(request);
+  if (!sessionToken) return null;
+  return verifySession(sessionToken);
 }
 
 /**
@@ -134,13 +133,8 @@ async function isAdmin(request: NextRequest): Promise<boolean> {
  * List all invites (admin only)
  */
 export async function GET(request: NextRequest) {
-  console.log("[API Invites] GET request received");
-  
   // Check admin permission
-  const isUserAdmin = await isAdmin(request);
-  console.log("[API Invites] Admin check result:", isUserAdmin);
-  
-  if (!isUserAdmin) {
+  if (!await isAdmin(request)) {
     return NextResponse.json(
       { error: "Unauthorized - Admin access required" },
       { status: 403 }
@@ -156,9 +150,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    console.log("[API Invites] Ensuring invites table exists...");
     await ensureInvitesTable(pool);
-    console.log("[API Invites] Table check complete");
     const client = await pool.connect();
     try {
       const result = await client.query(`
@@ -210,13 +202,8 @@ export async function GET(request: NextRequest) {
  * Create a new invite (admin only)
  */
 export async function POST(request: NextRequest) {
-  console.log("[API Invites] POST request received");
-  
   // Check admin permission
-  const isUserAdmin = await isAdmin(request);
-  console.log("[API Invites] Admin check result:", isUserAdmin);
-  
-  if (!isUserAdmin) {
+  if (!await isAdmin(request)) {
     return NextResponse.json(
       { error: "Unauthorized - Admin access required" },
       { status: 403 }
@@ -232,11 +219,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    console.log("[API Invites] Ensuring invites table exists...");
     await ensureInvitesTable(pool);
-    console.log("[API Invites] Parsing request body...");
     const body = await request.json();
-    console.log("[API Invites] Request body:", body);
     const { email, role = "user" } = body;
 
     if (!email) {
@@ -256,8 +240,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get current user from session
-    const sessionToken = getSessionCookie(request);
-    const currentUser = sessionToken ? await verifySession(sessionToken) : null;
+    const currentUser = await getCurrentUser(request);
     
     if (!currentUser) {
       return NextResponse.json(
@@ -268,20 +251,7 @@ export async function POST(request: NextRequest) {
 
     const client = await pool.connect();
     try {
-      // Check if there's already a pending invite for this email
-      const existingInvite = await client.query(
-        `SELECT id FROM invites WHERE email = $1 AND "usedAt" IS NULL AND "expiresAt" > NOW()`,
-        [email]
-      );
-
-      if (existingInvite.rows.length > 0) {
-        return NextResponse.json(
-          { error: "An active invite already exists for this email" },
-          { status: 409 }
-        );
-      }
-
-      // Check if user already exists
+      // Check if email already exists in users table
       const existingUser = await client.query(
         `SELECT id FROM "user" WHERE email = $1`,
         [email]
@@ -290,6 +260,19 @@ export async function POST(request: NextRequest) {
       if (existingUser.rows.length > 0) {
         return NextResponse.json(
           { error: "A user with this email already exists" },
+          { status: 409 }
+        );
+      }
+
+      // Check for existing pending invite
+      const existingInvite = await client.query(
+        `SELECT id FROM invites WHERE email = $1 AND "usedAt" IS NULL AND "expiresAt" > NOW()`,
+        [email]
+      );
+
+      if (existingInvite.rows.length > 0) {
+        return NextResponse.json(
+          { error: "An active invite already exists for this email" },
           { status: 409 }
         );
       }
@@ -311,33 +294,21 @@ export async function POST(request: NextRequest) {
 
       const invite = result.rows[0];
 
-      // Get inviter info for email
-      const inviterResult = await client.query(
-        `SELECT name, email FROM "user" WHERE id = $1`,
-        [currentUser.id]
-      );
-      const inviter = inviterResult.rows[0];
-
       // Send invite email
       const emailResult = await sendInviteEmail({
         email,
         token,
         role,
-        invitedByName: inviter?.name,
+        invitedByName: currentUser.name,
       });
 
-      if (!emailResult.success) {
-        console.error("[API Invites] Failed to send email:", emailResult.error);
-        // Don't fail the request, just log the error
-      }
-
-      return NextResponse.json({ 
+      return NextResponse.json({
+        success: true,
         invite: {
           id: invite.id,
           email: invite.email,
           token: invite.token,
           role: invite.role,
-          invitedBy: invite.invitedBy,
           expiresAt: invite.expiresAt,
           createdAt: invite.createdAt,
           status: "pending",
