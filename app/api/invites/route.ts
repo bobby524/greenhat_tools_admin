@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Pool } from "pg";
 import { sendInviteEmail } from "@/lib/email";
 import { randomUUID } from "crypto";
-import { headers } from "next/headers";
 import { getPool } from "@/lib/db";
+import type { Pool } from "pg";
 
 // Auto-migrate: ensure invites table exists
 async function ensureInvitesTable(pool: Pool): Promise<void> {

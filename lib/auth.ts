@@ -1,11 +1,11 @@
 import { betterAuth, BetterAuthOptions } from "better-auth";
 import { admin } from "better-auth/plugins";
-import { getDatabaseUrl, getPoolWithOptions } from "@/lib/db";
+import { getPool, getDatabaseUrl } from "@/lib/db";
 
 // Export auth config for migrations
 export function getAuthConfig(): BetterAuthOptions | null {
   const databaseUrl = getDatabaseUrl();
-  const pool = getPoolWithOptions({ max: 20 });
+  const pool = getPool();
 
   if (!databaseUrl || !pool) {
     console.error("[Auth] Database not configured");
