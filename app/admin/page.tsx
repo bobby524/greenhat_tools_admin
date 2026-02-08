@@ -1,7 +1,7 @@
 "use client";
 
 import AdminLayout from "./components/AdminLayout";
-import { Shield, Users, Lock, Activity, CheckCircle, Database, Server, Globe } from "lucide-react";
+import { Shield, Users, Lock, CheckCircle, Database, Server, Globe } from "lucide-react";
 
 // Green color palette matching tools.greenhatsec.com
 const COLORS = {

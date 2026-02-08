@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import AdminLayout from "../components/AdminLayout";
+import { ErrorBoundary } from "../components/ErrorBoundary";
+import { LoadingSpinner } from "../components/LoadingSpinner";
 import SettingsWorkspace from "./SettingsWorkspace";
 import { 
   Users, 
@@ -9,7 +11,6 @@ import {
   Briefcase,
   CheckCircle,
   ExternalLink,
-  Loader2,
   Settings,
   ArrowRight
 } from "lucide-react";
@@ -123,7 +124,9 @@ export default function GreenSpotAdminPage() {
         {/* Settings Workspace */}
         {showSettings && (
           <div className="border-t border-gray-200 pt-6">
-            <SettingsWorkspace />
+            <ErrorBoundary>
+              <SettingsWorkspace />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -172,7 +175,7 @@ function StatCard({
         <div>
           <p className="text-sm font-medium text-gray-600">{title}</p>
           <p className="text-2xl font-bold text-gray-900 mt-1">
-            {loading ? <Loader2 className="w-6 h-6 animate-spin text-[#62ac4a]" /> : value}
+            {loading ? <LoadingSpinner size="md" /> : value}
           </p>
         </div>
         <div className="w-12 h-12 bg-[#62ac4a]/10 rounded-xl flex items-center justify-center">

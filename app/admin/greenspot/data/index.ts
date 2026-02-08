@@ -26,14 +26,8 @@ export {
 } from "./pipelineData";
 export type { DealPipeline, DealPipelineStage } from "./pipelineData";
 
-export { applyArchiveFilter, applySort, applyPagination } from "./queryHelpers";
-
-export {
-  toRepoError,
-  buildRepoResult,
-  buildRepoListResult,
-  defaultPagination,
-} from "./repoUtils";
+// Note: queryHelpers and repoUtils are kept for internal use but not exported
+// as they're not currently used by any components
 
 export { getSupabaseClient } from "./supabaseClient";
 
