@@ -2,25 +2,17 @@
 
 import { useEffect, useState } from "react";
 import AdminLayout from "../components/AdminLayout";
+import SettingsWorkspace from "./SettingsWorkspace";
 import { 
   Users, 
   Building2, 
-  Briefcase, 
+  Briefcase,
   CheckCircle,
-  Settings,
   ExternalLink,
-  Loader2
+  Loader2,
+  Settings,
+  ArrowRight
 } from "lucide-react";
-
-// Green color palette
-const COLORS = {
-  primary: "#62ac4a",
-  primaryHover: "#4e8a3a",
-  primaryDeep: "#41734a",
-  mint: "#e8f5e9",
-  surface: "#f1f8f2",
-  border: "#c8e6c9",
-};
 
 interface Stats {
   contacts: number;
@@ -32,6 +24,7 @@ interface Stats {
 export default function GreenSpotAdminPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -59,15 +52,28 @@ export default function GreenSpotAdminPage() {
             <h1 className="text-2xl font-bold text-gray-900">GreenSpot Admin</h1>
             <p className="text-gray-600 mt-1">Manage CRM settings, pipelines, and field customization</p>
           </div>
-          <a
-            href="https://tools.greenhatsec.com/greenspot"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-[#62ac4a] text-white rounded-lg hover:bg-[#4e8a3a] transition font-medium"
-          >
-            Open GreenSpot
-            <ExternalLink className="w-4 h-4" />
-          </a>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition ${
+                showSettings 
+                  ? "bg-gray-100 text-gray-700 hover:bg-gray-200" 
+                  : "bg-[#62ac4a] text-white hover:bg-[#4e8a3a]"
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              {showSettings ? "Hide Settings" : "Edit Settings"}
+            </button>
+            <a
+              href="https://tools.greenhatsec.com/greenspot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:border-[#62ac4a] hover:text-[#62ac4a] transition font-medium"
+            >
+              Open GreenSpot
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
         </div>
 
         {/* Stats Grid */}
@@ -98,44 +104,52 @@ export default function GreenSpotAdminPage() {
           />
         </div>
 
-        {/* Settings Links */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Settings</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <SettingsCard
-              title="Deal Pipelines"
-              description="Configure sales pipelines and stages"
-              href="https://tools.greenhatsec.com/greenspot/settings"
-              icon={Briefcase}
-            />
-            <SettingsCard
-              title="Contact Fields"
-              description="Customize contact record fields"
-              href="https://tools.greenhatsec.com/greenspot/settings"
-              icon={Users}
-            />
-            <SettingsCard
-              title="Company Fields"
-              description="Customize company record fields"
-              href="https://tools.greenhatsec.com/greenspot/settings"
-              icon={Building2}
-            />
-          </div>
-        </div>
-
-        {/* Info Banner */}
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+        {/* Success Banner */}
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4">
           <div className="flex items-start gap-3">
-            <Settings className="w-5 h-5 text-amber-600 mt-0.5" />
+            <div className="w-5 h-5 rounded-full bg-[#62ac4a] flex items-center justify-center flex-shrink-0 mt-0.5">
+              <CheckCircle className="w-3 h-3 text-white" />
+            </div>
             <div>
-              <h3 className="font-semibold text-amber-800">Settings Migration in Progress</h3>
-              <p className="text-sm text-amber-700 mt-1">
-                Full settings workspace is being migrated from tools.greenhatsec.com to admin.greenhatsec.com. 
-                Click the settings cards above to access the current settings page.
+              <h3 className="font-semibold text-green-800">Database Connected</h3>
+              <p className="text-sm text-green-700 mt-1">
+                All settings changes are now saved directly to the Supabase database. 
+                Changes made here will immediately reflect on tools.greenhatsec.com.
               </p>
             </div>
           </div>
         </div>
+
+        {/* Settings Workspace */}
+        {showSettings && (
+          <div className="border-t border-gray-200 pt-6">
+            <SettingsWorkspace />
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        {!showSettings && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <QuickActionCard
+              title="Deal Pipelines"
+              description="Configure sales pipelines and stages"
+              onClick={() => setShowSettings(true)}
+              icon={Briefcase}
+            />
+            <QuickActionCard
+              title="Contact Fields"
+              description="Customize contact record fields"
+              onClick={() => setShowSettings(true)}
+              icon={Users}
+            />
+            <QuickActionCard
+              title="Company Fields"
+              description="Customize company record fields"
+              onClick={() => setShowSettings(true)}
+              icon={Building2}
+            />
+          </div>
+        )}
       </div>
     </AdminLayout>
   );
@@ -169,23 +183,21 @@ function StatCard({
   );
 }
 
-function SettingsCard({
+function QuickActionCard({
   title,
   description,
-  href,
+  onClick,
   icon: Icon,
 }: {
   title: string;
   description: string;
-  href: string;
+  onClick: () => void;
   icon: React.ComponentType<{ className?: string }>;
 }) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group block p-4 rounded-xl border border-gray-200 hover:border-[#62ac4a] hover:shadow-md transition-all"
+    <button
+      onClick={onClick}
+      className="group block w-full text-left p-4 rounded-xl border border-gray-200 hover:border-[#62ac4a] hover:shadow-md transition-all bg-white"
     >
       <div className="flex items-start gap-3">
         <div className="w-10 h-10 bg-[#62ac4a]/10 rounded-lg flex items-center justify-center">
@@ -197,8 +209,8 @@ function SettingsCard({
           </h3>
           <p className="text-sm text-gray-600 mt-1">{description}</p>
         </div>
-        <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-[#62ac4a]" />
+        <ArrowRight className="w-4 h-4 text-gray-400 group-hover:text-[#62ac4a] transition-colors" />
       </div>
-    </a>
+    </button>
   );
 }

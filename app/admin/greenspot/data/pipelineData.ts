@@ -8,6 +8,7 @@ import { getSupabaseClient } from "./supabaseClient";
 import type { Database } from "./types";
 
 export type DealPipelineStage = {
+  id: string;
   key: string;
   label: string;
   order: number;
@@ -57,6 +58,7 @@ const isMissingPipelineTables = (error: unknown) => {
 
 const defaultPipelineStages: DealPipelineStage[] = [
   {
+    id: "stage-new",
     key: "new",
     label: "New",
     order: 1,
@@ -65,6 +67,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-qualified",
     key: "qualified",
     label: "Qualified",
     order: 2,
@@ -73,6 +76,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-proposal",
     key: "proposal",
     label: "Proposal",
     order: 3,
@@ -81,6 +85,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-negotiation",
     key: "negotiation",
     label: "Negotiation",
     order: 4,
@@ -89,6 +94,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-contract",
     key: "contract",
     label: "Contract",
     order: 5,
@@ -97,6 +103,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-closed-won",
     key: "closed_won",
     label: "Closed won",
     order: 6,
@@ -105,6 +112,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-closed-lost",
     key: "closed_lost",
     label: "Closed lost",
     order: 7,
@@ -116,6 +124,7 @@ const defaultPipelineStages: DealPipelineStage[] = [
 
 const renewalPipelineStages: DealPipelineStage[] = [
   {
+    id: "stage-renewal-intake",
     key: "renewal_intake",
     label: "Renewal intake",
     order: 1,
@@ -124,6 +133,7 @@ const renewalPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-customer-review",
     key: "customer_review",
     label: "Customer review",
     order: 2,
@@ -132,6 +142,7 @@ const renewalPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-legal-review",
     key: "legal_review",
     label: "Legal review",
     order: 3,
@@ -140,6 +151,7 @@ const renewalPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-final-approval",
     key: "final_approval",
     label: "Final approval",
     order: 4,
@@ -148,6 +160,7 @@ const renewalPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-renewal-closed-won",
     key: "closed_won",
     label: "Closed won",
     order: 5,
@@ -156,6 +169,7 @@ const renewalPipelineStages: DealPipelineStage[] = [
     isActive: true,
   },
   {
+    id: "stage-renewal-closed-lost",
     key: "closed_lost",
     label: "Closed lost",
     order: 6,
@@ -244,6 +258,7 @@ const mapSupabasePipelines = (
     (accumulator, stage) => {
       const list = accumulator[stage.pipeline_id] ?? [];
       list.push({
+        id: stage.id,
         key: stage.stage_key,
         label: stage.label,
         order: stage.order,
@@ -282,6 +297,7 @@ const buildLegacyPipeline = (stages: DealStageRow[]): DealPipeline[] => {
 
   const mappedStages = stages
     .map((stage) => ({
+      id: `legacy-${stage.key}`,
       key: stage.key,
       label: stage.label,
       order: stage.order,
