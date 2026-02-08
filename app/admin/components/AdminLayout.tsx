@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { useRouter, usePathname } from "next/navigation";
+import Link from "next/link";
 import { 
   LayoutDashboard, 
   Shield, 
@@ -181,13 +182,9 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
             const isActive = pathname === item.href;
             const Icon = item.icon;
             return (
-              <a
+              <Link
                 key={item.href}
                 href={item.href}
-                onClick={(e) => {
-                  e.preventDefault();
-                  router.push(item.href);
-                }}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   isActive
                     ? "bg-[#1a3d23] text-white"
@@ -196,7 +193,7 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
               >
                 <Icon className={`w-[18px] h-[18px] ${isActive ? "text-[#62ac4a]" : ""}`} />
                 <span>{item.label}</span>
-              </a>
+              </Link>
             );
           })}
         </nav>

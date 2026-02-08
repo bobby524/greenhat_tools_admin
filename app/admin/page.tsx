@@ -1,3 +1,5 @@
+"use client";
+
 import AdminLayout from "./components/AdminLayout";
 import { Shield, Users, Lock, Activity, CheckCircle, Database, Server, Globe } from "lucide-react";
 
