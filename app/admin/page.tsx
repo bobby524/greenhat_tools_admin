@@ -26,13 +26,13 @@ export default function AdminDashboard() {
           color={COLORS.primary}
         />
 
-        {/* CRM Admin Card */}
+        {/* GreenSpot Admin Card */}
         <DashboardCard
-          title="CRM Admin"
-          description="Manage CRM settings, user data, and system configuration"
+          title="GreenSpot"
+          description="Manage CRM settings, pipelines, fields, and system configuration"
           icon={Users}
-          href="/admin/crm"
-          status="coming-soon"
+          href="/admin/greenspot"
+          status="active"
           color={COLORS.primary}
         />
 
@@ -91,9 +91,9 @@ export default function AdminDashboard() {
             description="Update permissions"
           />
           <QuickAction 
-            label="System Settings"
-            href="/admin/crm"
-            description="Configure options"
+            label="GreenSpot Settings"
+            href="/admin/greenspot"
+            description="Configure CRM options"
           />
           <QuickAction 
             label="View Documentation"
