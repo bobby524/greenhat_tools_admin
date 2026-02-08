@@ -58,15 +58,23 @@ async function ensureInvitesTable(pool: Pool): Promise<void> {
   }
 }
 
-// Session cookie check
+// Session cookie check - try all possible cookie names
 function getSessionCookie(request: NextRequest): string | null {
   const names = [
     "__Secure-greenhat_tools.session_token",
     "greenhat_tools.session_token",
+    "__Host-greenhat_tools.session_token",
   ];
+  
+  console.log("[API Invites] Checking cookies. All cookies:", Array.from(request.cookies.getAll()).map(c => c.name));
+  
   for (const name of names) {
     const cookie = request.cookies.get(name);
-    if (cookie?.value) return cookie.value;
+    console.log(`[API Invites] Checking cookie "${name}":`, cookie ? "found" : "not found");
+    if (cookie?.value) {
+      console.log(`[API Invites] Found session cookie: ${name.substring(0, 30)}...`);
+      return cookie.value;
+    }
   }
   return null;
 }
@@ -78,19 +86,24 @@ async function verifySession(sessionToken: string): Promise<{ id: string; role: 
 
   const client = await pool.connect();
   try {
-    // Query the session and user
+    // Query the session and user - check both expires and expiresAt column names
     const result = await client.query(
       `
-      SELECT u.id, u.role
+      SELECT u.id, u.role, s.expires, s."expiresAt"
       FROM "session" s
       JOIN "user" u ON s."userId" = u.id
-      WHERE s.token = $1 AND s.expires > NOW()
+      WHERE s.token = $1 
+      AND (s.expires > NOW() OR s."expiresAt" > NOW())
       `,
       [sessionToken]
     );
 
+    console.log("[API Invites] Session query result rows:", result.rows.length);
     if (result.rows.length === 0) return null;
     return result.rows[0];
+  } catch (error) {
+    console.error("[API Invites] Error in verifySession:", error);
+    return null;
   } finally {
     client.release();
   }
