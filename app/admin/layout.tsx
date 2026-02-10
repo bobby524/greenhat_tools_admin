@@ -1,13 +1,23 @@
+<<<<<<< HEAD
 "use client";
 
 import { useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 
 export default function AdminLayout({
+=======
+export const metadata = {
+  title: "Admin Dashboard",
+  description: "Greenhat Tools Admin Portal",
+};
+
+export default function AdminRootLayout({
+>>>>>>> fix-auth-deploy
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
+<<<<<<< HEAD
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -74,3 +84,7 @@ export default function AdminLayout({
     </div>
   )
 }
+=======
+  return children;
+}
+>>>>>>> fix-auth-deploy

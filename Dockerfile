@@ -12,6 +12,10 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
+<<<<<<< HEAD
+=======
+RUN npm ci --legacy-peer-deps
+>>>>>>> fix-auth-deploy
 
 # Install dependencies with legacy peer deps for better-auth compatibility
 RUN npm ci --legacy-peer-deps

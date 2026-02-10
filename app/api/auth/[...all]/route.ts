@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+<<<<<<< HEAD
 import { NextRequest, NextResponse } from "next/server";
 
 /**
@@ -24,5 +25,13 @@ export async function DELETE(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+=======
+
+export async function GET(request: Request) {
+  return auth.handler(request);
+}
+
+export async function POST(request: Request) {
+>>>>>>> fix-auth-deploy
   return auth.handler(request);
 }

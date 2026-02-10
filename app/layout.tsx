@@ -1,8 +1,8 @@
-import type { Metadata } from 'next'
+import './globals.css'
 
-export const metadata: Metadata = {
-  title: 'Greenhat Tools Admin',
-  description: 'Platform administration panel',
+export const metadata = {
+  title: 'Greenhat Admin MCP',
+  description: 'Admin portal for Greenhat Tools',
 }
 
 export default function RootLayout({
@@ -12,9 +12,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: 'system-ui, sans-serif' }}>
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   )
 }
