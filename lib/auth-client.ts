@@ -7,11 +7,7 @@ import { createAuthClient } from "better-auth/client";
 export const authClient = createAuthClient({
   // Base URL for auth API
   baseURL: process.env.NEXT_PUBLIC_APP_URL || "https://admin.greenhatsec.com",
-<<<<<<< HEAD
-  
-=======
 
->>>>>>> fix-auth-deploy
   // Fetch configuration
   fetchOptions: {
     credentials: "include",
@@ -32,8 +28,4 @@ export const {
 } = authClient;
 
 // Type exports
-<<<<<<< HEAD
 export type { Session, User } from "better-auth";
-=======
-export type { Session, User } from "better-auth";
->>>>>>> fix-auth-deploy
