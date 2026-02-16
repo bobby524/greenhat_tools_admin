@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -628,6 +628,14 @@ impl ToolRouter {
                 require_bearer: _,
             } => {
                 let mut headers = HeaderMap::new();
+
+                // Prevent Tools middleware from rewriting this request back to
+                // api.greenhatsec.com, which would create an infinite loop
+                // (gateway → tools → gateway → tools → …).
+                headers.insert(
+                    HeaderName::from_static("x-gateway-internal"),
+                    HeaderValue::from_static("1"),
+                );
 
                 if let Some(ref authz) = ctx.upstream_authorization {
                     if let Ok(v) = HeaderValue::from_str(authz) {
