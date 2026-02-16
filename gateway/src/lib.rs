@@ -105,9 +105,12 @@ async fn proxy_my_tasks(
 ) -> Response {
     let query = request.uri().query().unwrap_or("");
     let url = if query.is_empty() {
-        format!("{}/api/my-tasks", state.upstream_base)
+        format!("{}/api/my-tasks?__gateway_internal=1", state.upstream_base)
     } else {
-        format!("{}/api/my-tasks?{}", state.upstream_base, query)
+        format!(
+            "{}/api/my-tasks?{}&__gateway_internal=1",
+            state.upstream_base, query
+        )
     };
 
     let canonical_request_id = request_id_from_extension(request_id);
@@ -230,9 +233,9 @@ async fn proxy_api_path(
     let query = request.uri().query().unwrap_or("");
     let base = format!("{}{}", state.upstream_base, upstream_path);
     let url = if query.is_empty() {
-        base
+        format!("{base}?__gateway_internal=1")
     } else {
-        format!("{base}?{query}")
+        format!("{base}?{query}&__gateway_internal=1")
     };
 
     let method = request.method().clone();
