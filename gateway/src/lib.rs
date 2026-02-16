@@ -106,8 +106,7 @@ async fn proxy_my_tasks(
         format!("{}/api/my-tasks?{}", state.upstream_base, query)
     };
 
-    let mut upstream_req = state.client.get(url);
-
+    let mut upstream_req = state.client.get(url).header("x-gateway-internal", "1");
     if let Some(cookie) = headers.get(header::COOKIE) {
         upstream_req = upstream_req.header(header::COOKIE, cookie);
     }
@@ -196,7 +195,11 @@ async fn proxy_api_path(
         }
     };
 
-    let mut upstream_req = state.client.request(method, url).body(body);
+    let mut upstream_req = state
+        .client
+        .request(method, url)
+        .header("x-gateway-internal", "1")
+        .body(body);
 
     for h in [
         header::COOKIE,
