@@ -942,6 +942,14 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenbooks_bank_accounts",
             "get_greenbooks_bank_account",
             "list_greenbooks_reports",
+            "post_greenbooks_invoice_gl",
+            "post_greenbooks_bill_gl",
+            "post_greenbooks_journal_entry",
+            "create_greenbooks_invoice_payment",
+            "create_greenbooks_bill_payment",
+            "create_greenbooks_bank_transfer",
+            "post_greenbooks_bank_reconcile",
+            "list_greenbooks_bank_transactions",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -995,6 +1003,14 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenbooks_bank_accounts",
             "get_greenbooks_bank_account",
             "list_greenbooks_reports",
+            "post_greenbooks_invoice_gl",
+            "post_greenbooks_bill_gl",
+            "post_greenbooks_journal_entry",
+            "create_greenbooks_invoice_payment",
+            "create_greenbooks_bill_payment",
+            "create_greenbooks_bank_transfer",
+            "post_greenbooks_bank_reconcile",
+            "list_greenbooks_bank_transactions",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -1596,6 +1612,57 @@ fn validate_args(
         }
         "list_greenbooks_reports" => {
             Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports")?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "post_greenbooks_invoice_gl" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/invoices/{id}/post-gl"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "post_greenbooks_bill_gl" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/bills/{id}/post-gl"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "post_greenbooks_journal_entry" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/journal-entries/{id}/post"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenbooks_invoice_payment" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/invoices/{id}/payments"))?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "create_greenbooks_bill_payment" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/bills/{id}/payments"))?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "create_greenbooks_bank_transfer" => {
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenbooks/bank-accounts/transfer")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "post_greenbooks_bank_reconcile" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url(&format!("/api/greenbooks/bank-accounts/{id}/reconcile"))?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "list_greenbooks_bank_transactions" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            let mut url = url::Url::parse(&make_url(&format!("/api/greenbooks/bank-accounts/{id}/transactions"))?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("reconciled").and_then(|v| v.as_bool()) { qp.append_pair("reconciled", if v { "true" } else { "false" }); }
+                if let Some(v) = params.get("startDate").and_then(|v| v.as_str()) { qp.append_pair("startDate", v); }
+                if let Some(v) = params.get("endDate").and_then(|v| v.as_str()) { qp.append_pair("endDate", v); }
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) { qp.append_pair("limit", &v.to_string()); }
+            }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
         }
 
         #[cfg(test)]
