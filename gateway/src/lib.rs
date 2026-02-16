@@ -154,6 +154,23 @@ async fn proxy_greenbooks(
     proxy_api_path(state, format!("/api/greenbooks/{path}"), headers, request).await
 }
 
+async fn proxy_greenspot(
+    State(state): State<ApiProxyState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    proxy_api_path(state, format!("/api/greenspot/{path}"), headers, request).await
+}
+
+async fn proxy_users(
+    State(state): State<ApiProxyState>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    proxy_api_path(state, "/api/users".to_string(), headers, request).await
+}
+
 async fn proxy_api_path(
     state: ApiProxyState,
     upstream_path: String,
@@ -1165,7 +1182,15 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/{*path}",
-            axum::routing::any(proxy_greenbooks).with_state(proxy_state),
+            axum::routing::any(proxy_greenbooks).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenspot/{*path}",
+            axum::routing::any(proxy_greenspot).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/users",
+            axum::routing::any(proxy_users).with_state(proxy_state),
         )
         .route(
             "/api/mcp/dashboard",
