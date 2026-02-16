@@ -762,6 +762,7 @@ struct DashboardLog {
     id: String,
     timestamp: String,
     session_id: String,
+    event_type: String,
     tool_name: String,
     params: Value,
     result: String,
@@ -829,7 +830,8 @@ async fn mcp_dashboard(
         match tokio::fs::read_to_string(&audit_path).await {
             Ok(text) => {
                 let lines: Vec<&str> = text.lines().collect();
-                let start = lines.len().saturating_sub(limit);
+                let scan_window = (limit.saturating_mul(20)).clamp(200, 5000);
+                let start = lines.len().saturating_sub(scan_window);
                 for (idx, line) in lines[start..].iter().enumerate() {
                     let Ok(evt) = serde_json::from_str::<Value>(line) else {
                         continue;
@@ -839,11 +841,22 @@ async fn mcp_dashboard(
                         .get("event_type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
-                    let payload = evt.get("payload").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+
+                    // Admin tools page usage should reflect MCP tool activity.
+                    // Ignore non-tool audit events (auth, csrf, rate-limit, etc.)
+                    // so active tools don't get drowned out in the recent feed.
+                    if !event_type.starts_with("tool.invoke_") {
+                        continue;
+                    }
+
+                    let payload = evt
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or_else(|| Value::Object(Default::default()));
                     let tool_name = payload
                         .get("tool_name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or(event_type)
+                        .unwrap_or("unknown_tool")
                         .to_owned();
 
                     let result = match event_type {
@@ -895,6 +908,7 @@ async fn mcp_dashboard(
                             .unwrap_or("1970-01-01T00:00:00Z")
                             .to_owned(),
                         session_id,
+                        event_type: event_type.to_owned(),
                         tool_name,
                         params: payload,
                         result,
@@ -978,7 +992,7 @@ async fn mcp_dashboard(
 
     Json(DashboardResponse {
         session: default_session,
-        recent_logs: logs.into_iter().rev().take(20).collect(),
+        recent_logs: logs.into_iter().rev().take(limit).collect(),
         risk_level,
         alerts,
         firewall: FirewallConfig {
