@@ -195,9 +195,33 @@ impl SessionValidator for BetterAuthClient {
 
         match credential {
             SessionCredential::Cookie(raw_cookie_header) => {
-                // Forward original cookie header unchanged; Better Auth may
-                // require companion cookies beyond the session token cookie.
-                req = req.header("cookie", raw_cookie_header);
+                // Forward only the session cookie variants expected by Better Auth.
+                // Passing the full browser Cookie header can trigger upstream 5xx
+                // in some deployments (oversized/invalid companion cookies).
+                let candidates = [
+                    self.cookie_name.as_str(),
+                    &format!("__Secure-{}", self.cookie_name),
+                    "better-auth.session_token",
+                    "__Secure-better-auth.session_token",
+                ];
+
+                let mut forwarded: Vec<String> = Vec::new();
+                for pair in raw_cookie_header.split(';') {
+                    let pair = pair.trim();
+                    let Some((k, v)) = pair.split_once('=') else {
+                        continue;
+                    };
+                    let key = k.trim();
+                    if candidates.iter().any(|c| *c == key) {
+                        forwarded.push(format!("{}={}", key, v.trim()));
+                    }
+                }
+
+                if forwarded.is_empty() {
+                    return Err(AuthError::InvalidSession("missing session cookie".into()));
+                }
+
+                req = req.header("cookie", forwarded.join("; "));
             }
             SessionCredential::Bearer(token) => {
                 req = req.header("authorization", format!("Bearer {token}"));
