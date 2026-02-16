@@ -1,7 +1,8 @@
 //! Session validation trait and BetterAuth HTTP implementation.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -119,6 +120,8 @@ pub struct BetterAuthClient {
     http: reqwest::Client,
     base_url: String,
     cookie_name: String,
+    // small in-memory cache to avoid hammering BetterAuth on every parallel API call
+    cache: Arc<Mutex<HashMap<String, (Instant, Principal)>>>,
 }
 
 /// Composite validator: use one validator for cookie credentials and another for bearer credentials.
@@ -173,6 +176,7 @@ impl BetterAuthClient {
             http,
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             cookie_name: cookie_name.into(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -192,38 +196,63 @@ impl SessionValidator for BetterAuthClient {
         let url = format!("{}/api/auth/get-session", self.base_url);
 
         let mut req = self.http.get(&url);
+        let cache_key: String;
 
         match credential {
             SessionCredential::Cookie(raw_cookie_header) => {
                 // Forward only the session cookie variants expected by Better Auth.
                 // Passing the full browser Cookie header can trigger upstream 5xx
                 // in some deployments (oversized/invalid companion cookies).
+                let secure_cookie_name = format!("__Secure-{}", self.cookie_name);
                 let candidates = [
                     self.cookie_name.as_str(),
-                    &format!("__Secure-{}", self.cookie_name),
+                    secure_cookie_name.as_str(),
                     "better-auth.session_token",
                     "__Secure-better-auth.session_token",
                 ];
 
                 let mut forwarded: Vec<String> = Vec::new();
+                let mut token_val: Option<String> = None;
                 for pair in raw_cookie_header.split(';') {
                     let pair = pair.trim();
                     let Some((k, v)) = pair.split_once('=') else {
                         continue;
                     };
                     let key = k.trim();
+                    let val = v.trim();
                     if candidates.iter().any(|c| *c == key) {
-                        forwarded.push(format!("{}={}", key, v.trim()));
+                        forwarded.push(format!("{}={}", key, val));
+                        if token_val.is_none() {
+                            token_val = Some(val.to_string());
+                        }
                     }
                 }
 
-                if forwarded.is_empty() {
+                let Some(token_val) = token_val else {
                     return Err(AuthError::InvalidSession("missing session cookie".into()));
+                };
+
+                cache_key = format!("cookie:{}", token_val);
+
+                if let Ok(cache) = self.cache.lock() {
+                    if let Some((ts, principal)) = cache.get(&cache_key) {
+                        if ts.elapsed() < Duration::from_secs(20) {
+                            return Ok(principal.clone());
+                        }
+                    }
                 }
 
                 req = req.header("cookie", forwarded.join("; "));
             }
             SessionCredential::Bearer(token) => {
+                cache_key = format!("bearer:{}", token);
+                if let Ok(cache) = self.cache.lock() {
+                    if let Some((ts, principal)) = cache.get(&cache_key) {
+                        if ts.elapsed() < Duration::from_secs(20) {
+                            return Ok(principal.clone());
+                        }
+                    }
+                }
                 req = req.header("authorization", format!("Bearer {token}"));
             }
         }
@@ -265,13 +294,22 @@ impl SessionValidator for BetterAuthClient {
             roles.push(role);
         }
 
-        Ok(Principal {
+        let principal = Principal {
             user_id: data.user.id,
             org_id: data.user.organization_id,
             roles,
             session_id: data.session.id,
             auth_method,
-        })
+        };
+
+        if let Ok(mut cache) = self.cache.lock() {
+            if cache.len() > 10_000 {
+                cache.clear();
+            }
+            cache.insert(cache_key, (Instant::now(), principal.clone()));
+        }
+
+        Ok(principal)
     }
 }
 
