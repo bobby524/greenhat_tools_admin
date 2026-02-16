@@ -923,6 +923,25 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenspot_tasks",
             "create_greenspot_task",
             "get_greenspot_task",
+            // GreenBooks shims
+            "list_greenbooks_accounts",
+            "get_greenbooks_account",
+            "list_greenbooks_customers",
+            "get_greenbooks_customer",
+            "list_greenbooks_vendors",
+            "get_greenbooks_vendor",
+            "list_greenbooks_invoices",
+            "get_greenbooks_invoice",
+            "create_greenbooks_invoice",
+            "list_greenbooks_bills",
+            "get_greenbooks_bill",
+            "create_greenbooks_bill",
+            "list_greenbooks_journal_entries",
+            "get_greenbooks_journal_entry",
+            "create_greenbooks_journal_entry",
+            "list_greenbooks_bank_accounts",
+            "get_greenbooks_bank_account",
+            "list_greenbooks_reports",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -957,6 +976,25 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenspot_tasks",
             "create_greenspot_task",
             "get_greenspot_task",
+            // GreenBooks shims
+            "list_greenbooks_accounts",
+            "get_greenbooks_account",
+            "list_greenbooks_customers",
+            "get_greenbooks_customer",
+            "list_greenbooks_vendors",
+            "get_greenbooks_vendor",
+            "list_greenbooks_invoices",
+            "get_greenbooks_invoice",
+            "create_greenbooks_invoice",
+            "list_greenbooks_bills",
+            "get_greenbooks_bill",
+            "create_greenbooks_bill",
+            "list_greenbooks_journal_entries",
+            "get_greenbooks_journal_entry",
+            "create_greenbooks_journal_entry",
+            "list_greenbooks_bank_accounts",
+            "get_greenbooks_bank_account",
+            "list_greenbooks_reports",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -1476,6 +1514,88 @@ fn validate_args(
         "get_greenspot_task" => {
             let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
             Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenspot/tasks/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+
+        // --- GreenBooks shims ---------------------------------------------
+        "list_greenbooks_accounts" => {
+            let mut url = url::Url::parse(&make_url("/api/greenbooks/accounts")?).unwrap();
+            if let Some(v) = params.get("q").and_then(|v| v.as_str()) { url.query_pairs_mut().append_pair("q", v); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_account" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/accounts/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenbooks_customers" => {
+            let mut url = url::Url::parse(&make_url("/api/greenbooks/customers")?).unwrap();
+            if let Some(v) = params.get("q").and_then(|v| v.as_str()) { url.query_pairs_mut().append_pair("q", v); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_customer" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/customers/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenbooks_vendors" => {
+            let mut url = url::Url::parse(&make_url("/api/greenbooks/vendors")?).unwrap();
+            if let Some(v) = params.get("q").and_then(|v| v.as_str()) { url.query_pairs_mut().append_pair("q", v); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_vendor" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/vendors/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenbooks_invoices" => {
+            let mut url = url::Url::parse(&make_url("/api/greenbooks/invoices")?).unwrap();
+            if let Some(v) = params.get("status").and_then(|v| v.as_str()) { url.query_pairs_mut().append_pair("status", v); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_invoice" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/invoices/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenbooks_invoice" => {
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenbooks/invoices")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "list_greenbooks_bills" => {
+            let mut url = url::Url::parse(&make_url("/api/greenbooks/bills")?).unwrap();
+            if let Some(v) = params.get("status").and_then(|v| v.as_str()) { url.query_pairs_mut().append_pair("status", v); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_bill" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/bills/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenbooks_bill" => {
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenbooks/bills")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "list_greenbooks_journal_entries" => {
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/journal-entries")?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_journal_entry" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/journal-entries/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenbooks_journal_entry" => {
+            let payload = params.get("payload").cloned().unwrap_or_else(|| params.clone());
+            let body_bytes = json_body(payload);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenbooks/journal-entries")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "list_greenbooks_bank_accounts" => {
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/bank-accounts")?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "get_greenbooks_bank_account" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenbooks/bank-accounts/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenbooks_reports" => {
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports")?, body: None, content_type_json: false, require_bearer: true })
         }
 
         #[cfg(test)]
