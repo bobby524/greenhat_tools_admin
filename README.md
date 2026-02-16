@@ -65,6 +65,32 @@ services:
 Variables from `.env` are injected into the container at runtime — they are
 **not** baked into the image.
 
+
+### Better Stack Observability (Gateway)
+
+Gateway request logging is the source of truth for `api.greenhatsec.com`.
+
+Required / optional env vars:
+
+- `BETTERSTACK_ENABLED` (`true|false`, default `false`)
+- `BETTERSTACK_SOURCE_TOKEN` (required when enabled)
+- `BETTERSTACK_INGEST_HOST` (required when enabled, e.g. `in.logs.betterstack.com`)
+
+Each request emits a structured log with this schema:
+
+- `service`
+- `route`
+- `method`
+- `status`
+- `x_request_id`
+- `latency_ms`
+- `upstream_status` (when proxied)
+- `upstream_latency_ms` (when proxied)
+- `timeout_hit`
+- `error_kind` (set for failures / error responses)
+
+`x-request-id` is canonicalized at ingress (generated when missing), propagated to upstream requests, and echoed in gateway responses.
+
 ### Required vs Optional
 
 See [docs/SECRETS.md](docs/SECRETS.md) for the full variable reference,

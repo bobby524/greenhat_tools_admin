@@ -4,6 +4,7 @@ pub mod config;
 pub mod egress;
 pub mod error;
 pub mod middleware;
+pub mod observability;
 pub mod rbac;
 pub mod tool_router;
 
@@ -36,10 +37,12 @@ use crate::middleware::headers::header_hardening_middleware;
 use crate::middleware::rate_limit::{rate_limit_middleware, RateLimiter};
 use crate::middleware::rbac::{rbac_middleware, RbacState};
 use crate::middleware::validate::{validate_request, ValidationConfig};
+use crate::observability::{request_log_middleware, Observability, UpstreamTrace, X_REQUEST_ID};
 use crate::rbac::{Policy, PolicyEngine};
 use crate::tool_router::{ToolAuditCtx, ToolRequest, ToolRouter};
 use axum::extract::State;
 use axum::http::header;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -97,6 +100,7 @@ struct ApiProxyState {
 async fn proxy_my_tasks(
     State(state): State<ApiProxyState>,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
     let query = request.uri().query().unwrap_or("");
@@ -106,7 +110,13 @@ async fn proxy_my_tasks(
         format!("{}/api/my-tasks?{}", state.upstream_base, query)
     };
 
-    let mut upstream_req = state.client.get(url).header("x-gateway-internal", "1");
+    let canonical_request_id = request_id_from_extension(request_id);
+
+    let mut upstream_req = state
+        .client
+        .get(url)
+        .header("x-gateway-internal", "1")
+        .header(X_REQUEST_ID, canonical_request_id);
     if let Some(cookie) = headers.get(header::COOKIE) {
         upstream_req = upstream_req.header(header::COOKIE, cookie);
     }
@@ -114,6 +124,7 @@ async fn proxy_my_tasks(
         upstream_req = upstream_req.header(header::AUTHORIZATION, authz);
     }
 
+    let start = Instant::now();
     match upstream_req.send().await {
         Ok(upstream) => {
             let status = upstream.status();
@@ -129,9 +140,16 @@ async fn proxy_my_tasks(
                 StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             resp.headers_mut()
                 .insert(header::CONTENT_TYPE, content_type);
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: Some(status.as_u16()),
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit: false,
+                error_kind: None,
+            });
             resp
         }
         Err(err) => {
+            let timeout_hit = err.is_timeout();
             let payload = serde_json::json!({
                 "error": {
                     "code": 502,
@@ -139,7 +157,14 @@ async fn proxy_my_tasks(
                     "message": format!("failed to reach tools API: {err}"),
                 }
             });
-            (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
+            let mut resp = (StatusCode::BAD_GATEWAY, Json(payload)).into_response();
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: None,
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit,
+                error_kind: Some("upstream_unavailable".to_owned()),
+            });
+            resp
         }
     }
 }
@@ -148,37 +173,66 @@ async fn proxy_greenbooks(
     State(state): State<ApiProxyState>,
     Path(path): Path<String>,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
-    proxy_api_path(state, format!("/api/greenbooks/{path}"), headers, request).await
+    proxy_api_path(
+        state,
+        format!("/api/greenbooks/{path}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
 }
 
 async fn proxy_greenspot(
     State(state): State<ApiProxyState>,
     Path(path): Path<String>,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
-    proxy_api_path(state, format!("/api/greenspot/{path}"), headers, request).await
+    proxy_api_path(
+        state,
+        format!("/api/greenspot/{path}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
 }
 
 async fn proxy_users(
     State(state): State<ApiProxyState>,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
-    proxy_api_path(state, "/api/users".to_string(), headers, request).await
+    proxy_api_path(
+        state,
+        "/api/users".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
 }
 
 async fn proxy_api_path(
     state: ApiProxyState,
     upstream_path: String,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
     let query = request.uri().query().unwrap_or("");
     let base = format!("{}{}", state.upstream_base, upstream_path);
-    let url = if query.is_empty() { base } else { format!("{base}?{query}") };
+    let url = if query.is_empty() {
+        base
+    } else {
+        format!("{base}?{query}")
+    };
 
     let method = request.method().clone();
     let body = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
@@ -195,10 +249,13 @@ async fn proxy_api_path(
         }
     };
 
+    let canonical_request_id = request_id_from_extension(request_id);
+
     let mut upstream_req = state
         .client
         .request(method, url)
         .header("x-gateway-internal", "1")
+        .header(X_REQUEST_ID, canonical_request_id)
         .body(body);
 
     for h in [
@@ -213,6 +270,7 @@ async fn proxy_api_path(
         }
     }
 
+    let start = Instant::now();
     match upstream_req.send().await {
         Ok(upstream) => {
             let status = upstream.status();
@@ -235,9 +293,17 @@ async fn proxy_api_path(
                 }
             }
 
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: Some(status.as_u16()),
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit: false,
+                error_kind: None,
+            });
+
             resp
         }
         Err(err) => {
+            let timeout_hit = err.is_timeout();
             let payload = serde_json::json!({
                 "error": {
                     "code": 502,
@@ -245,7 +311,14 @@ async fn proxy_api_path(
                     "message": format!("failed to reach tools upstream API: {err}"),
                 }
             });
-            (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
+            let mut resp = (StatusCode::BAD_GATEWAY, Json(payload)).into_response();
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: None,
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit,
+                error_kind: Some("upstream_unavailable".to_owned()),
+            });
+            resp
         }
     }
 }
@@ -354,11 +427,9 @@ async fn call_tool(
 }
 
 fn body_to_object(body: Value, request_id: &str) -> Result<Map<String, Value>, AppError> {
-    body.as_object()
-        .cloned()
-        .ok_or_else(|| {
-            AppError::bad_request("request body must be a JSON object").with_request_id(request_id)
-        })
+    body.as_object().cloned().ok_or_else(|| {
+        AppError::bad_request("request body must be a JSON object").with_request_id(request_id)
+    })
 }
 
 fn pick_value<'a>(map: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -455,8 +526,10 @@ fn tool_result_response(result: crate::tool_router::ToolResult, request_id: &str
         let mut resp = Response::new(Body::from(result.data));
         *resp.status_mut() =
             StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        resp.headers_mut()
-            .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
         return resp;
     }
 
@@ -554,13 +627,7 @@ async fn list_exponential_tasks(
     if let Some(v) = query.cursor {
         params.insert("cursor".into(), Value::String(v));
     }
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "list_tasks",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "list_tasks", Value::Object(params)).await)
 }
 
 async fn create_exponential_task(
@@ -574,13 +641,7 @@ async fn create_exponential_task(
     let request_id = ctx.request_id.clone();
     let body = body_to_object(body, &request_id)?;
     let params = task_params_from_body(&body);
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "create_task",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "create_task", Value::Object(params)).await)
 }
 
 async fn get_exponential_task(
@@ -611,13 +672,7 @@ async fn update_exponential_task(
     if params.len() == 1 {
         return Err(AppError::bad_request("no fields to update").with_request_id(request_id));
     }
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "update_task",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "update_task", Value::Object(params)).await)
 }
 
 async fn delete_exponential_task(
@@ -629,13 +684,7 @@ async fn delete_exponential_task(
 ) -> Result<Response, AppError> {
     let ctx = build_tool_audit_ctx(&headers, request_id, principal);
     let params = serde_json::json!({ "taskId": task_id });
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "delete_task",
-        params,
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "delete_task", params).await)
 }
 
 async fn list_exponential_sprints(
@@ -653,13 +702,7 @@ async fn list_exponential_sprints(
     if let Some(v) = query.state {
         params.insert("state".into(), Value::String(v));
     }
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "list_sprints",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "list_sprints", Value::Object(params)).await)
 }
 
 async fn create_exponential_sprint(
@@ -673,13 +716,7 @@ async fn create_exponential_sprint(
     let request_id = ctx.request_id.clone();
     let body = body_to_object(body, &request_id)?;
     let params = sprint_params_from_body(&body);
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "create_sprint",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "create_sprint", Value::Object(params)).await)
 }
 
 async fn get_exponential_sprint(
@@ -691,13 +728,7 @@ async fn get_exponential_sprint(
 ) -> Result<Response, AppError> {
     let ctx = build_tool_audit_ctx(&headers, request_id, principal);
     let params = serde_json::json!({ "sprintId": sprint_id });
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "get_sprint",
-        params,
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "get_sprint", params).await)
 }
 
 async fn list_exponential_projects(
@@ -715,13 +746,7 @@ async fn list_exponential_projects(
     if let Some(v) = query.include_archived {
         params.insert("includeArchived".into(), Value::Bool(v));
     }
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "list_projects",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "list_projects", Value::Object(params)).await)
 }
 
 async fn create_exponential_project(
@@ -735,13 +760,7 @@ async fn create_exponential_project(
     let request_id = ctx.request_id.clone();
     let body = body_to_object(body, &request_id)?;
     let params = project_params_from_body(&body);
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "create_project",
-        Value::Object(params),
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "create_project", Value::Object(params)).await)
 }
 
 async fn get_exponential_project(
@@ -753,22 +772,24 @@ async fn get_exponential_project(
 ) -> Result<Response, AppError> {
     let ctx = build_tool_audit_ctx(&headers, request_id, principal);
     let params = serde_json::json!({ "projectId": project_id });
-    Ok(execute_exponential_tool(
-        router,
-        ctx,
-        "get_project",
-        params,
-    )
-    .await)
+    Ok(execute_exponential_tool(router, ctx, "get_project", params).await)
 }
 
 async fn proxy_exponential_passthrough(
     State(state): State<ApiProxyState>,
     Path(path): Path<String>,
     headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
     request: Request,
 ) -> Response {
-    proxy_api_path(state, format!("/api/exponential/{path}"), headers, request).await
+    proxy_api_path(
+        state,
+        format!("/api/exponential/{path}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -891,7 +912,12 @@ async fn mcp_dashboard(
                         .get("error_message")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_owned())
-                        .or_else(|| payload.get("reason").and_then(|v| v.as_str()).map(|s| s.to_owned()));
+                        .or_else(|| {
+                            payload
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_owned())
+                        });
 
                     let duration_ms = payload
                         .get("duration_ms")
@@ -953,15 +979,17 @@ async fn mcp_dashboard(
 
     let mut sessions: HashMap<String, SessionMetrics> = HashMap::new();
     for log in &logs {
-        let entry = sessions.entry(log.session_id.clone()).or_insert(SessionMetrics {
-            session_id: log.session_id.clone(),
-            start_time: log.timestamp.clone(),
-            tool_calls: 0,
-            errors: 0,
-            blocked: 0,
-            max_acl_level: "PUBLIC",
-            lethal_trifecta: false,
-        });
+        let entry = sessions
+            .entry(log.session_id.clone())
+            .or_insert(SessionMetrics {
+                session_id: log.session_id.clone(),
+                start_time: log.timestamp.clone(),
+                tool_calls: 0,
+                errors: 0,
+                blocked: 0,
+                max_acl_level: "PUBLIC",
+                lethal_trifecta: false,
+            });
 
         entry.tool_calls += 1;
         if log.result == "error" {
@@ -1058,7 +1086,7 @@ async fn fallback_handler(request: Request) -> AppError {
 /// The `audit_log` parameter is optional; pass `None` to use the default
 /// env-configured sink (stdout + optional file).
 pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
-    let x_request_id = HeaderName::from_static("x-request-id");
+    let x_request_id = HeaderName::from_static(X_REQUEST_ID);
 
     let audit = audit_log.unwrap_or_else(AuditLog::from_env);
 
@@ -1075,6 +1103,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         audit: audit.clone(),
         ..CsrfConfig::default()
     };
+    let observability = Observability::from_env();
 
     // Load RBAC policy (if present) once and reuse it for RBAC + tool runtime bounds.
     let policy: Option<Policy> = config.policy_file.as_ref().map(|policy_path| {
@@ -1112,14 +1141,13 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         "create_project",
         "get_project",
     ] {
-        tool_cfg
-            .tools
-            .entry(tool.to_owned())
-            .or_insert(crate::tool_router::ToolRuntimeToolConfig {
+        tool_cfg.tools.entry(tool.to_owned()).or_insert(
+            crate::tool_router::ToolRuntimeToolConfig {
                 enabled: true,
                 timeout: std::time::Duration::from_secs(30),
                 max_concurrent: 16,
-            });
+            },
+        );
     }
 
     let tool_router = ToolRouter::new_with_config(
@@ -1188,8 +1216,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/{*path}",
-            axum::routing::any(proxy_exponential_passthrough)
-                .with_state(exponential_proxy_state),
+            axum::routing::any(proxy_exponential_passthrough).with_state(exponential_proxy_state),
         )
         .route(
             "/api/greenbooks/{*path}",
@@ -1301,6 +1328,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .allow_credentials(true);
 
     router
+        .layer(axum_mw::from_fn_with_state(
+            observability,
+            request_log_middleware,
+        ))
         .layer(axum_mw::from_fn_with_state(csrf, csrf_middleware))
         .layer(axum_mw::from_fn_with_state(validation, validate_request))
         .layer(axum_mw::from_fn_with_state(
@@ -1420,13 +1451,15 @@ mod tests {
         router = router.layer(axum_mw::from_fn_with_state(rbac_state, rbac_middleware));
 
         if let Some(p) = principal {
-            router = router.layer(axum_mw::from_fn(move |mut req: Request<Body>, next: Next| {
-                let p = p.clone();
-                async move {
-                    req.extensions_mut().insert(p);
-                    next.run(req).await
-                }
-            }));
+            router = router.layer(axum_mw::from_fn(
+                move |mut req: Request<Body>, next: Next| {
+                    let p = p.clone();
+                    async move {
+                        req.extensions_mut().insert(p);
+                        next.run(req).await
+                    }
+                },
+            ));
         }
 
         router

@@ -223,6 +223,43 @@ async fn get_without_content_type_passes() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn request_id_is_generated_when_missing() {
+    let config = test_config(100);
+    let app = gateway::app(&config, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(resp.headers().get("x-request-id").is_some());
+}
+
+#[tokio::test]
+async fn request_id_is_preserved_when_provided() {
+    let config = test_config(100);
+    let app = gateway::app(&config, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header("x-request-id", "req-test-123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.headers().get("x-request-id").unwrap(), "req-test-123");
+}
+
 // ---------------------------------------------------------------------------
 // Body-size validation tests
 // ---------------------------------------------------------------------------
