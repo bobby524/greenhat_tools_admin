@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::audit::AuditLog;
 use crate::auth::{AuthState, BetterAuthClient};
 use crate::config::GatewayConfig;
+use crate::egress::{EgressClient, EgressConfig, EgressError};
 use crate::error::AppError;
 use crate::middleware::auth::auth_middleware;
 use crate::middleware::csrf::{csrf_middleware, CsrfConfig};
@@ -94,6 +95,12 @@ async fn version() -> Json<VersionResponse> {
 #[derive(Clone)]
 struct ApiProxyState {
     client: reqwest::Client,
+    upstream_base: String,
+}
+
+#[derive(Clone)]
+struct EgressProxyState {
+    client: EgressClient,
     upstream_base: String,
 }
 
@@ -223,6 +230,72 @@ async fn proxy_users(
     .await
 }
 
+async fn proxy_exponential_projects_list(
+    State(state): State<EgressProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        "/api/exponential/projects".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_project_detail(
+    State(state): State<EgressProxyState>,
+    Path(project_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/projects/{project_id}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_teams_list(
+    State(state): State<EgressProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        "/api/exponential/teams".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_team_detail(
+    State(state): State<EgressProxyState>,
+    Path(team_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/teams/{team_id}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
 async fn proxy_api_path(
     state: ApiProxyState,
     upstream_path: String,
@@ -309,6 +382,117 @@ async fn proxy_api_path(
         }
         Err(err) => {
             let timeout_hit = err.is_timeout();
+            let payload = serde_json::json!({
+                "error": {
+                    "code": 502,
+                    "kind": "upstream_unavailable",
+                    "message": format!("failed to reach tools upstream API: {err}"),
+                }
+            });
+            let mut resp = (StatusCode::BAD_GATEWAY, Json(payload)).into_response();
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: None,
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit,
+                error_kind: Some("upstream_unavailable".to_owned()),
+            });
+            resp
+        }
+    }
+}
+
+async fn egress_proxy_api_path(
+    state: EgressProxyState,
+    upstream_path: String,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    let query = request.uri().query().unwrap_or("");
+    let base = format!("{}{}", state.upstream_base, upstream_path);
+    let url = if query.is_empty() {
+        format!("{base}?__gateway_internal=1")
+    } else {
+        format!("{base}?{query}&__gateway_internal=1")
+    };
+
+    let method = request.method().clone();
+    let body = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
+        Ok(bytes) => {
+            if bytes.is_empty() {
+                None
+            } else {
+                Some(bytes)
+            }
+        }
+        Err(err) => {
+            let payload = serde_json::json!({
+                "error": {
+                    "code": 400,
+                    "kind": "invalid_request_body",
+                    "message": format!("failed to read request body: {err}"),
+                }
+            });
+            return (StatusCode::BAD_REQUEST, Json(payload)).into_response();
+        }
+    };
+
+    let canonical_request_id = request_id_from_extension(request_id);
+
+    let mut upstream_headers = axum::http::HeaderMap::new();
+    upstream_headers.insert(header::USER_AGENT, HeaderValue::from_static("lua-resty-http"));
+    if let Ok(value) = HeaderValue::from_str(&canonical_request_id) {
+        upstream_headers.insert(HeaderName::from_static(X_REQUEST_ID), value);
+    }
+    for h in [
+        header::COOKIE,
+        header::AUTHORIZATION,
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+        header::HeaderName::from_static("x-csrf-token"),
+    ] {
+        if let Some(val) = headers.get(&h) {
+            upstream_headers.insert(&h, val.clone());
+        }
+    }
+
+    let start = Instant::now();
+    match state
+        .client
+        .request_with_headers(method, &url, body, Some(upstream_headers))
+        .await
+    {
+        Ok(upstream) => {
+            let status = upstream.status;
+            let upstream_headers = upstream.headers;
+
+            let mut resp = Response::new(Body::from(upstream.body));
+            *resp.status_mut() =
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+
+            for h in [
+                header::CONTENT_TYPE,
+                header::CACHE_CONTROL,
+                header::ETAG,
+                header::LOCATION,
+                header::HeaderName::from_static("set-cookie"),
+            ] {
+                for value in upstream_headers.get_all(&h).iter() {
+                    resp.headers_mut().append(&h, value.clone());
+                }
+            }
+
+            resp.extensions_mut().insert(UpstreamTrace {
+                status: Some(status),
+                latency_ms: Some(start.elapsed().as_millis() as u64),
+                timeout_hit: false,
+                error_kind: None,
+            });
+
+            resp
+        }
+        Err(err) => {
+            let timeout_hit = matches!(err, EgressError::Http(ref e) if e.is_timeout());
             let payload = serde_json::json!({
                 "error": {
                     "code": 502,
@@ -1179,6 +1363,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         upstream_base: exponential_upstream_base(),
     };
 
+    let exponential_egress_state = EgressProxyState {
+        client: EgressClient::new(EgressConfig::from_env()),
+        upstream_base: exponential_upstream_base(),
+    };
+
     let mut router = Router::new()
         .route("/health", axum::routing::get(health))
         .route("/version", axum::routing::get(version))
@@ -1208,6 +1397,26 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/exponential/sprints/{sprint_id}",
             axum::routing::get(get_exponential_sprint).with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/projects",
+            axum::routing::get(proxy_exponential_projects_list)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/projects/{project_id}",
+            axum::routing::get(proxy_exponential_project_detail)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/teams",
+            axum::routing::get(proxy_exponential_teams_list)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/teams/{team_id}",
+            axum::routing::get(proxy_exponential_team_detail)
+                .with_state(exponential_egress_state),
         )
         .route(
             "/api/exponential/{*path}",
@@ -1460,6 +1669,46 @@ mod tests {
         router
     }
 
+    fn build_proxy_router(
+        proxy_state: EgressProxyState,
+        rbac_state: RbacState,
+        principal: Option<Principal>,
+    ) -> Router {
+        let mut router = Router::new()
+            .route(
+                "/api/exponential/projects",
+                get(proxy_exponential_projects_list).with_state(proxy_state.clone()),
+            )
+            .route(
+                "/api/exponential/projects/{project_id}",
+                get(proxy_exponential_project_detail).with_state(proxy_state.clone()),
+            )
+            .route(
+                "/api/exponential/teams",
+                get(proxy_exponential_teams_list).with_state(proxy_state.clone()),
+            )
+            .route(
+                "/api/exponential/teams/{team_id}",
+                get(proxy_exponential_team_detail).with_state(proxy_state),
+            );
+
+        router = router.layer(axum_mw::from_fn_with_state(rbac_state, rbac_middleware));
+
+        if let Some(p) = principal {
+            router = router.layer(axum_mw::from_fn(
+                move |mut req: Request<Body>, next: Next| {
+                    let p = p.clone();
+                    async move {
+                        req.extensions_mut().insert(p);
+                        next.run(req).await
+                    }
+                },
+            ));
+        }
+
+        router
+    }
+
     #[tokio::test]
     async fn exponential_tasks_auth_and_shape() {
         std::env::set_var("EXPONENTIAL_API_BASE_URL", "https://example.com");
@@ -1496,5 +1745,60 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_json(resp).await;
         assert!(body.get("tasks").and_then(|v| v.as_array()).is_some());
+    }
+
+    #[tokio::test]
+    async fn exponential_projects_and_teams_auth_and_shape() {
+        let mut allowed_hosts = HashSet::new();
+        allowed_hosts.insert("example.com".to_owned());
+        let egress_cfg = EgressConfig {
+            allowed_hosts,
+            deny_private_ips: false,
+            ..EgressConfig::default()
+        };
+
+        let response = serde_json::json!({
+            "projects": [{ "id": "project_1" }],
+            "teams": [{ "id": "team_1" }]
+        })
+        .to_string();
+
+        let egress = EgressClient::new(egress_cfg).with_static_response(200, response);
+        let proxy_state = EgressProxyState {
+            client: egress,
+            upstream_base: "https://example.com".to_string(),
+        };
+
+        let policy = test_policy();
+        let engine = Arc::new(PolicyEngine::new(policy));
+        let rbac_state = RbacState::new(engine, AuditLog::from_env());
+
+        let unauth_router = build_proxy_router(proxy_state.clone(), rbac_state.clone(), None);
+        let resp = unauth_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/projects")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let authed_router = build_proxy_router(proxy_state, rbac_state, Some(test_principal()));
+        let resp = authed_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/teams/team_1")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("teams").and_then(|v| v.as_array()).is_some());
     }
 }

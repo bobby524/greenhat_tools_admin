@@ -139,6 +139,10 @@ Keep it short, factual, and link to commits/files.
 - Docs: `docs/AUDITING.md`.
 - `.env.example` updated with `AUDIT_LOG_FILE`.
 
+### Exponential project/team deterministic reads ✅
+- Added Rust-native egress proxy handlers for project/team list + detail reads to avoid tool-router queue lane and rewrite loops.
+- Files: `gateway/src/lib.rs`, `progress.md`.
+
 ### AuthZ: RBAC + module entitlements middleware (deny-by-default) ✅
 - **Policy loading:** `POLICY_FILE` env var → JSON matching `docs/schemas/policy.v0.schema.json`.
   Loaded at startup; panics on missing/invalid file.  Schema version validated (must be `0.x.y`).
