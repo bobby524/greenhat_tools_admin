@@ -1210,16 +1210,6 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(get_exponential_sprint).with_state(tool_router.clone()),
         )
         .route(
-            "/api/exponential/projects",
-            axum::routing::get(list_exponential_projects)
-                .post(create_exponential_project)
-                .with_state(tool_router.clone()),
-        )
-        .route(
-            "/api/exponential/projects/{project_id}",
-            axum::routing::get(get_exponential_project).with_state(tool_router.clone()),
-        )
-        .route(
             "/api/exponential/{*path}",
             axum::routing::any(proxy_exponential_passthrough).with_state(exponential_proxy_state),
         )
