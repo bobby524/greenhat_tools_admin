@@ -208,7 +208,26 @@ fn extract_credential(headers: &HeaderMap, cookie_name: &str) -> Option<SessionC
 
     // Cookie-based (browser) session.
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
-    parse_cookie(cookie_header, cookie_name).map(SessionCredential::Cookie)
+
+    // 1) Honor configured cookie name first.
+    if let Some(token) = parse_cookie(cookie_header, cookie_name) {
+        return Some(SessionCredential::Cookie(token));
+    }
+
+    // 2) Compatibility fallbacks for historical BetterAuth cookie names.
+    for alias in [
+        "__Secure-greenhat_tools.session_token",
+        "greenhat_tools.session_token",
+        "better-auth.session_token",
+    ] {
+        if alias != cookie_name {
+            if let Some(token) = parse_cookie(cookie_header, alias) {
+                return Some(SessionCredential::Cookie(token));
+            }
+        }
+    }
+
+    None
 }
 
 fn parse_cookie(cookie_header: &str, name: &str) -> Option<String> {
@@ -234,5 +253,22 @@ mod tests {
             parse_cookie(h, "better-auth.session_token"),
             Some("abc123".into())
         );
+    }
+
+    #[test]
+    fn extract_credential_supports_cookie_aliases() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "a=1; __Secure-greenhat_tools.session_token=tok123; b=2"
+                .parse()
+                .expect("valid cookie header"),
+        );
+
+        let cred = extract_credential(&headers, "better-auth.session_token");
+        match cred {
+            Some(SessionCredential::Cookie(t)) => assert_eq!(t, "tok123"),
+            _ => panic!("expected cookie credential"),
+        }
     }
 }

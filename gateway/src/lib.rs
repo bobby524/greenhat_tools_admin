@@ -124,7 +124,8 @@ async fn proxy_my_tasks(
             let body = upstream.bytes().await.unwrap_or_default();
 
             let mut resp = Response::new(Body::from(body));
-            *resp.status_mut() = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            *resp.status_mut() =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             resp.headers_mut()
                 .insert(header::CONTENT_TYPE, content_type);
             resp
