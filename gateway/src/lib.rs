@@ -1128,13 +1128,21 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
     )
     .with_audit(audit.clone());
 
+    // Proxy clients MUST have a timeout to prevent request pile-ups when
+    // upstream (Vercel serverless) is slow or cold-starting.
+    let proxy_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
     let proxy_state = ApiProxyState {
-        client: reqwest::Client::new(),
+        client: proxy_client.clone(),
         upstream_base: config.betterauth_base_url.trim_end_matches('/').to_string(),
     };
 
     let exponential_proxy_state = ApiProxyState {
-        client: reqwest::Client::new(),
+        client: proxy_client,
         upstream_base: exponential_upstream_base(),
     };
 
