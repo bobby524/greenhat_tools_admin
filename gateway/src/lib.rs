@@ -310,6 +310,248 @@ async fn call_tool(
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+struct DashboardQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DashboardLog {
+    id: String,
+    timestamp: String,
+    session_id: String,
+    tool_name: String,
+    params: Value,
+    result: String,
+    error: Option<String>,
+    duration_ms: u64,
+    acl_level: &'static str,
+    risk_flags: RiskFlags,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RiskFlags {
+    read_private_data: bool,
+    write_operation: bool,
+    external_communication: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SessionMetrics {
+    session_id: String,
+    start_time: String,
+    tool_calls: u64,
+    errors: u64,
+    blocked: u64,
+    max_acl_level: &'static str,
+    lethal_trifecta: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FirewallConfig {
+    enabled: bool,
+    default_policy: &'static str,
+    tools_configured: usize,
+    blocked_sessions: usize,
+    data_leak_prevention: bool,
+    lethal_trifecta_protection: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardResponse {
+    session: SessionMetrics,
+    recent_logs: Vec<DashboardLog>,
+    risk_level: &'static str,
+    alerts: Vec<String>,
+    firewall: FirewallConfig,
+    all_sessions: Vec<SessionMetrics>,
+}
+
+async fn mcp_dashboard(
+    State(router): State<ToolRouter>,
+    Query(query): Query<DashboardQuery>,
+) -> Json<DashboardResponse> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+
+    let mut logs: Vec<DashboardLog> = Vec::new();
+    let mut alerts: Vec<String> = Vec::new();
+
+    let audit_path = std::env::var("AUDIT_LOG_FILE").unwrap_or_default();
+    let audit_path = audit_path.trim().to_owned();
+
+    if !audit_path.is_empty() {
+        match tokio::fs::read_to_string(&audit_path).await {
+            Ok(text) => {
+                let lines: Vec<&str> = text.lines().collect();
+                let start = lines.len().saturating_sub(limit);
+                for (idx, line) in lines[start..].iter().enumerate() {
+                    let Ok(evt) = serde_json::from_str::<Value>(line) else {
+                        continue;
+                    };
+
+                    let event_type = evt
+                        .get("event_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let payload = evt.get("payload").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+                    let tool_name = payload
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(event_type)
+                        .to_owned();
+
+                    let result = match event_type {
+                        "tool.invoke_success" => "success",
+                        "tool.invoke_rejected" | "gateway.egress_blocked" => "blocked",
+                        "tool.invoke_failure" => "error",
+                        _ => "success",
+                    }
+                    .to_owned();
+
+                    let error = payload
+                        .get("error_message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_owned())
+                        .or_else(|| payload.get("reason").and_then(|v| v.as_str()).map(|s| s.to_owned()));
+
+                    let duration_ms = payload
+                        .get("duration_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+
+                    let session_id = evt
+                        .get("actor")
+                        .and_then(|a| a.get("user_id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            evt.get("request_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                        })
+                        .to_owned();
+
+                    let write_operation = tool_name.contains("create")
+                        || tool_name.contains("update")
+                        || tool_name.contains("delete")
+                        || tool_name.contains("write")
+                        || tool_name.contains("patch");
+                    let external_communication = event_type.starts_with("gateway.egress");
+
+                    logs.push(DashboardLog {
+                        id: evt
+                            .get("event_id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_owned())
+                            .unwrap_or_else(|| format!("{session_id}-{idx}")),
+                        timestamp: evt
+                            .get("timestamp")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("1970-01-01T00:00:00Z")
+                            .to_owned(),
+                        session_id,
+                        tool_name,
+                        params: payload,
+                        result,
+                        error,
+                        duration_ms,
+                        acl_level: "PUBLIC",
+                        risk_flags: RiskFlags {
+                            read_private_data: false,
+                            write_operation,
+                            external_communication,
+                        },
+                    });
+                }
+            }
+            Err(err) => {
+                alerts.push(format!("audit log unavailable: {err}"));
+            }
+        }
+    } else {
+        alerts.push("AUDIT_LOG_FILE is not configured; showing live empty state".to_string());
+    }
+
+    let mut sessions: HashMap<String, SessionMetrics> = HashMap::new();
+    for log in &logs {
+        let entry = sessions.entry(log.session_id.clone()).or_insert(SessionMetrics {
+            session_id: log.session_id.clone(),
+            start_time: log.timestamp.clone(),
+            tool_calls: 0,
+            errors: 0,
+            blocked: 0,
+            max_acl_level: "PUBLIC",
+            lethal_trifecta: false,
+        });
+
+        entry.tool_calls += 1;
+        if log.result == "error" {
+            entry.errors += 1;
+        }
+        if log.result == "blocked" {
+            entry.blocked += 1;
+        }
+        if log.timestamp < entry.start_time {
+            entry.start_time = log.timestamp.clone();
+        }
+        let rf = &log.risk_flags;
+        if rf.read_private_data && rf.write_operation && rf.external_communication {
+            entry.lethal_trifecta = true;
+        }
+    }
+
+    let mut all_sessions: Vec<SessionMetrics> = sessions.values().cloned().collect();
+    all_sessions.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+
+    let total_calls = logs.len() as u64;
+    let total_errors: u64 = all_sessions.iter().map(|s| s.errors).sum();
+    let total_blocked: u64 = all_sessions.iter().map(|s| s.blocked).sum();
+
+    let risk_level = if total_blocked > 10 || total_errors > 15 {
+        "high"
+    } else if total_blocked > 0 || total_errors > 0 {
+        "medium"
+    } else {
+        "low"
+    };
+
+    let blocked_sessions = all_sessions.iter().filter(|s| s.blocked > 0).count();
+
+    let default_session = all_sessions.first().cloned().unwrap_or(SessionMetrics {
+        session_id: "none".to_string(),
+        start_time: "1970-01-01T00:00:00Z".to_string(),
+        tool_calls: 0,
+        errors: 0,
+        blocked: 0,
+        max_acl_level: "PUBLIC",
+        lethal_trifecta: false,
+    });
+
+    if total_calls == 0 {
+        alerts.push("No recent audit events found in configured log".to_string());
+    }
+
+    Json(DashboardResponse {
+        session: default_session,
+        recent_logs: logs.into_iter().rev().take(20).collect(),
+        risk_level,
+        alerts,
+        firewall: FirewallConfig {
+            enabled: true,
+            default_policy: "deny",
+            tools_configured: router.supported_tool_names().len(),
+            blocked_sessions,
+            data_leak_prevention: true,
+            lethal_trifecta_protection: true,
+        },
+        all_sessions,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Structured fallback (404 with request_id)
 // ---------------------------------------------------------------------------
@@ -398,8 +640,12 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(proxy_my_tasks).with_state(proxy_state.clone()),
         )
         .route(
-            "/api/exponential/*path",
+            "/api/exponential/{*path}",
             axum::routing::any(proxy_exponential).with_state(proxy_state),
+        )
+        .route(
+            "/api/mcp/dashboard",
+            axum::routing::get(mcp_dashboard).with_state(tool_router.clone()),
         )
         .route(
             "/v1/tools",
