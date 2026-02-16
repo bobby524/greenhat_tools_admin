@@ -910,6 +910,19 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_projects",
             "create_project",
             "get_project",
+            // Greenspot shims
+            "list_greenspot_contacts",
+            "create_greenspot_contact",
+            "get_greenspot_contact",
+            "list_greenspot_companies",
+            "create_greenspot_company",
+            "get_greenspot_company",
+            "list_greenspot_deals",
+            "create_greenspot_deal",
+            "get_greenspot_deal",
+            "list_greenspot_tasks",
+            "create_greenspot_task",
+            "get_greenspot_task",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -931,6 +944,19 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_projects",
             "create_project",
             "get_project",
+            // Greenspot shims
+            "list_greenspot_contacts",
+            "create_greenspot_contact",
+            "get_greenspot_contact",
+            "list_greenspot_companies",
+            "create_greenspot_company",
+            "get_greenspot_company",
+            "list_greenspot_deals",
+            "create_greenspot_deal",
+            "get_greenspot_deal",
+            "list_greenspot_tasks",
+            "create_greenspot_task",
+            "get_greenspot_task",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -1347,6 +1373,109 @@ fn validate_args(
                 content_type_json: false,
                 require_bearer: true,
             })
+        }
+
+        // --- Greenspot shims ----------------------------------------------
+        "list_greenspot_contacts" => {
+            let mut url = url::Url::parse(&make_url("/api/greenspot/contacts")?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("search").and_then(|v| v.as_str()) { qp.append_pair("search", v); }
+                if let Some(v) = params.get("companyId").and_then(|v| v.as_str()) { qp.append_pair("companyId", v); }
+                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) { qp.append_pair("includeArchived", if v { "true" } else { "false" }); }
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) { qp.append_pair("limit", &v.to_string()); }
+            }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenspot_contact" => {
+            let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: name".to_string())?;
+            let mut body = serde_json::json!({ "name": name });
+            if let Some(v) = params.get("email").and_then(|v| v.as_str()) { body["email"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("phone").and_then(|v| v.as_str()) { body["phone"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("title").and_then(|v| v.as_str()) { body["title"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("companyId").and_then(|v| v.as_str()) { body["companyId"] = serde_json::Value::String(v.to_owned()); }
+            let body_bytes = json_body(body);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenspot/contacts")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "get_greenspot_contact" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenspot/contacts/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenspot_companies" => {
+            let mut url = url::Url::parse(&make_url("/api/greenspot/companies")?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("search").and_then(|v| v.as_str()) { qp.append_pair("search", v); }
+                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) { qp.append_pair("includeArchived", if v { "true" } else { "false" }); }
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) { qp.append_pair("limit", &v.to_string()); }
+            }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenspot_company" => {
+            let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: name".to_string())?;
+            let mut body = serde_json::json!({ "name": name });
+            if let Some(v) = params.get("domain").and_then(|v| v.as_str()) { body["domain"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("industry").and_then(|v| v.as_str()) { body["industry"] = serde_json::Value::String(v.to_owned()); }
+            let body_bytes = json_body(body);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenspot/companies")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "get_greenspot_company" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenspot/companies/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenspot_deals" => {
+            let mut url = url::Url::parse(&make_url("/api/greenspot/deals")?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("search").and_then(|v| v.as_str()) { qp.append_pair("search", v); }
+                if let Some(v) = params.get("stage").and_then(|v| v.as_str()) { qp.append_pair("stage", v); }
+                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) { qp.append_pair("includeArchived", if v { "true" } else { "false" }); }
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) { qp.append_pair("limit", &v.to_string()); }
+            }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenspot_deal" => {
+            let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: name".to_string())?;
+            let mut body = serde_json::json!({ "name": name });
+            if let Some(v) = params.get("stage").and_then(|v| v.as_str()) { body["stage"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("amount").and_then(|v| v.as_f64()) { body["amount"] = serde_json::json!(v); }
+            if let Some(v) = params.get("companyId").and_then(|v| v.as_str()) { body["companyId"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("primaryContactId").and_then(|v| v.as_str()) { body["primaryContactId"] = serde_json::Value::String(v.to_owned()); }
+            let body_bytes = json_body(body);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenspot/deals")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "get_greenspot_deal" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenspot/deals/{id}"))?, body: None, content_type_json: false, require_bearer: true })
+        }
+        "list_greenspot_tasks" => {
+            let mut url = url::Url::parse(&make_url("/api/greenspot/tasks")?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("search").and_then(|v| v.as_str()) { qp.append_pair("search", v); }
+                if let Some(v) = params.get("status").and_then(|v| v.as_str()) { qp.append_pair("status", v); }
+                if let Some(v) = params.get("assigneeId").and_then(|v| v.as_str()) { qp.append_pair("assigneeId", v); }
+                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) { qp.append_pair("includeArchived", if v { "true" } else { "false" }); }
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) { qp.append_pair("limit", &v.to_string()); }
+            }
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: url.to_string(), body: None, content_type_json: false, require_bearer: true })
+        }
+        "create_greenspot_task" => {
+            let title = params.get("title").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: title".to_string())?;
+            let mut body = serde_json::json!({ "title": title });
+            if let Some(v) = params.get("status").and_then(|v| v.as_str()) { body["status"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("dueDate").and_then(|v| v.as_str()) { body["dueDate"] = serde_json::Value::String(v.to_owned()); }
+            if let Some(v) = params.get("assigneeId").and_then(|v| v.as_str()) { body["assigneeId"] = serde_json::Value::String(v.to_owned()); }
+            let body_bytes = json_body(body);
+            if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); }
+            Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenspot/tasks")?, body: Some(body_bytes), content_type_json: true, require_bearer: true })
+        }
+        "get_greenspot_task" => {
+            let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| "missing required param: id".to_string())?;
+            Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url(&format!("/api/greenspot/tasks/{id}"))?, body: None, content_type_json: false, require_bearer: true })
         }
 
         #[cfg(test)]
