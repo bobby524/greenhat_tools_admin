@@ -1206,9 +1206,16 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             "/api/exponential/sprints/{sprint_id}",
             axum::routing::get(get_exponential_sprint).with_state(tool_router.clone()),
         )
-        // Route projects endpoints via passthrough path for stability.
-        // This avoids tool-router timeout regressions on list/get projects while
-        // keeping gateway auth/rbac/csrf layers at the edge.
+        .route(
+            "/api/exponential/projects",
+            axum::routing::get(list_exponential_projects)
+                .post(create_exponential_project)
+                .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/projects/{project_id}",
+            axum::routing::get(get_exponential_project).with_state(tool_router.clone()),
+        )
         .route(
             "/api/exponential/{*path}",
             axum::routing::any(proxy_exponential_passthrough).with_state(exponential_proxy_state),
