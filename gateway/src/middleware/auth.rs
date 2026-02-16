@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap};
+use axum::http::{header, HeaderMap, Method};
 use axum::middleware::Next;
 use axum::response::Response;
 use tower_http::request_id::RequestId;
@@ -72,6 +72,11 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = req.uri().path().to_owned();
+
+    // Always allow CORS preflight requests through.
+    if req.method() == Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
 
     // Exempt infrastructure probes and unauthenticated endpoints.
     if state.exempt_paths.iter().any(|p| path == *p) {
