@@ -21,6 +21,7 @@ export function getAuthConfig(): BetterAuthOptions | null {
     secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL || "https://admin.greenhatsec.com",
     trustedOrigins: [
+      "http://localhost:4000",
       "https://tools.greenhatsec.com",
       "https://admin.greenhatsec.com",
     ],
@@ -51,10 +52,15 @@ export function getAuthConfig(): BetterAuthOptions | null {
     advanced: {
       useSecureCookies: process.env.NODE_ENV === "production",
       cookiePrefix: "greenhat_tools",
-      crossSubDomainCookies: {
-        enabled: true,
-        domain: ".greenhatsec.com",
-      },
+      crossSubDomainCookies:
+        process.env.NODE_ENV === "production"
+          ? {
+              enabled: true,
+              domain: ".greenhatsec.com",
+            }
+          : {
+              enabled: false,
+            },
     },
   };
 }

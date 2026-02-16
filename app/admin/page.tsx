@@ -1,7 +1,7 @@
 "use client";
 
 import AdminLayout from "./components/AdminLayout";
-import { Shield, Users, Lock, CheckCircle, Database, Server, Globe } from "lucide-react";
+import { Shield, Users, Lock, CheckCircle, Database, Server, Globe, Users2, FolderGit } from "lucide-react";
 
 // Green color palette matching tools.greenhatsec.com
 const COLORS = {
@@ -16,6 +16,26 @@ export default function AdminDashboard() {
     <AdminLayout title="Dashboard">
       {/* Module Cards Grid */}
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {/* Teams Management Card */}
+        <DashboardCard
+          title="Teams"
+          description="Create and manage teams, assign members, and organize projects"
+          icon={FolderGit}
+          href="/admin/teams"
+          status="active"
+          color={COLORS.primary}
+        />
+
+        {/* User Management Card */}
+        <DashboardCard
+          title="Users"
+          description="View all users, manage team memberships and organization access"
+          icon={Users2}
+          href="/admin/users"
+          status="active"
+          color={COLORS.primary}
+        />
+
         {/* MCP Firewall Card */}
         <DashboardCard
           title="MCP Firewall"
@@ -26,10 +46,10 @@ export default function AdminDashboard() {
           color={COLORS.primary}
         />
 
-        {/* GreenSpot Admin Card */}
+        {/* Greenspot Admin Card */}
         <DashboardCard
-          title="GreenSpot"
-          description="Manage CRM settings, pipelines, fields, and system configuration"
+          title="Greenspot"
+          description="Manage Greenspot settings, pipelines, fields, and system configuration"
           icon={Users}
           href="/admin/greenspot"
           status="active"
@@ -81,24 +101,24 @@ export default function AdminDashboard() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <QuickAction 
+            label="Manage Teams"
+            href="/admin/teams"
+            description="Create and edit teams"
+          />
+          <QuickAction 
+            label="View All Users"
+            href="/admin/users"
+            description="User directory"
+          />
+          <QuickAction 
             label="View Firewall Logs"
             href="/admin/mcp-firewall"
             description="Check recent activity"
           />
           <QuickAction 
-            label="Manage Users"
-            href="/admin/access-controls"
-            description="Update permissions"
-          />
-          <QuickAction 
-            label="GreenSpot Settings"
+            label="Greenspot Settings"
             href="/admin/greenspot"
-            description="Configure CRM options"
-          />
-          <QuickAction 
-            label="View Documentation"
-            href="#"
-            description="Admin guides"
+            description="Configure Greenspot options"
           />
         </div>
       </div>

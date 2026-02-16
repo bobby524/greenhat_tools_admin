@@ -40,7 +40,8 @@ export function getPool(): Pool | null {
   poolInstance = new Pool({
     connectionString: databaseUrl,
     ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
-    max: 5,
+    // Keep low for Supabase session poolers in local dev to avoid max-client exhaustion.
+    max: Number(process.env.PG_POOL_MAX || 1),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });
@@ -61,7 +62,7 @@ export function getPoolWithOptions(options: { max: number }): Pool | null {
   return new Pool({
     connectionString: databaseUrl,
     ssl: isSupabase ? { rejectUnauthorized: false } : undefined,
-    max: options.max,
+    max: Number(process.env.PG_POOL_MAX || options.max || 1),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });

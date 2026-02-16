@@ -12,7 +12,9 @@ import {
   LogOut, 
   Menu,
   X,
-  ChevronDown
+  ChevronDown,
+  Users2,
+  FolderGit
 } from "lucide-react";
 
 interface AdminLayoutProps {
@@ -131,8 +133,10 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
 
   const navItems = [
     { href: "/admin", icon: LayoutDashboard, label: "Dashboard" },
+    { href: "/admin/teams", icon: FolderGit, label: "Teams" },
+    { href: "/admin/users", icon: Users2, label: "Users" },
     { href: "/admin/mcp-firewall", icon: Shield, label: "MCP Firewall" },
-    { href: "/admin/crm", icon: Users, label: "CRM Admin" },
+    { href: "/admin/greenspot", icon: Users, label: "Greenspot Admin" },
     { href: "/admin/access-controls", icon: Lock, label: "Access Controls" },
   ];
 
