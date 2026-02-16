@@ -151,13 +151,27 @@ async fn proxy_exponential(
     headers: axum::http::HeaderMap,
     request: Request,
 ) -> Response {
+    proxy_api_path(state, format!("/api/exponential/{path}"), headers, request).await
+}
+
+async fn proxy_greenbooks(
+    State(state): State<ApiProxyState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    proxy_api_path(state, format!("/api/greenbooks/{path}"), headers, request).await
+}
+
+async fn proxy_api_path(
+    state: ApiProxyState,
+    upstream_path: String,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
     let query = request.uri().query().unwrap_or("");
-    let base = format!("{}/api/exponential/{}", state.upstream_base, path);
-    let url = if query.is_empty() {
-        base
-    } else {
-        format!("{base}?{query}")
-    };
+    let base = format!("{}{}", state.upstream_base, upstream_path);
+    let url = if query.is_empty() { base } else { format!("{base}?{query}") };
 
     let method = request.method().clone();
     let body = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
@@ -217,7 +231,7 @@ async fn proxy_exponential(
                 "error": {
                     "code": 502,
                     "kind": "upstream_unavailable",
-                    "message": format!("failed to reach tools Exponential API: {err}"),
+                    "message": format!("failed to reach tools upstream API: {err}"),
                 }
             });
             (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
@@ -641,7 +655,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/{*path}",
-            axum::routing::any(proxy_exponential).with_state(proxy_state),
+            axum::routing::any(proxy_exponential).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/{*path}",
+            axum::routing::any(proxy_greenbooks).with_state(proxy_state),
         )
         .route(
             "/api/mcp/dashboard",
