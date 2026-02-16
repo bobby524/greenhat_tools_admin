@@ -1057,10 +1057,35 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
     });
 
     // Tool router (Option-A shims + audit log access)
-    let tool_cfg = policy
+    let mut tool_cfg = policy
         .as_ref()
         .and_then(crate::tool_router::ToolRuntimeConfig::from_rbac_policy)
         .unwrap_or_else(crate::tool_router::ToolRuntimeConfig::builtins);
+
+    // Ensure core Exponential HTTP tools are enabled for gateway-owned
+    // /api/exponential routes, even when runtime config defaults to deny.
+    for tool in [
+        "list_tasks",
+        "create_task",
+        "get_task",
+        "update_task",
+        "delete_task",
+        "list_sprints",
+        "create_sprint",
+        "get_sprint",
+        "list_projects",
+        "create_project",
+        "get_project",
+    ] {
+        tool_cfg
+            .tools
+            .entry(tool.to_owned())
+            .or_insert(crate::tool_router::ToolRuntimeToolConfig {
+                enabled: true,
+                timeout: std::time::Duration::from_secs(30),
+                max_concurrent: 16,
+            });
+    }
 
     let tool_router = ToolRouter::new_with_config(
         crate::egress::EgressClient::new(crate::egress::EgressConfig::from_env()),
