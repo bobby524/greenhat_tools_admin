@@ -116,6 +116,7 @@ async fn proxy_my_tasks(
         .client
         .get(url)
         .header("x-gateway-internal", "1")
+        .header(header::USER_AGENT, "lua-resty-http")
         .header(X_REQUEST_ID, canonical_request_id);
     if let Some(cookie) = headers.get(header::COOKIE) {
         upstream_req = upstream_req.header(header::COOKIE, cookie);
@@ -255,6 +256,7 @@ async fn proxy_api_path(
         .client
         .request(method, url)
         .header("x-gateway-internal", "1")
+        .header(header::USER_AGENT, "lua-resty-http")
         .header(X_REQUEST_ID, canonical_request_id)
         .body(body);
 
