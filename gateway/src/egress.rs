@@ -15,7 +15,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use bytes::Bytes;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method, RequestBuilder, Response};
 use tracing::{debug, warn};
 use url::Url;
@@ -372,9 +372,16 @@ impl EgressClient {
 
         // Build request
         let mut builder: RequestBuilder = self.inner.request(method.clone(), url.as_str());
-        if let Some(h) = headers {
-            builder = builder.headers(h);
-        }
+
+        // Mark all gateway-originated upstream calls so tools-side middleware can
+        // bypass public rewrites and avoid proxy loops.
+        let internal_header_name = HeaderName::from_static("x-gateway-internal");
+        let internal_header_value = HeaderValue::from_static("1");
+
+        let mut merged_headers = headers.unwrap_or_default();
+        merged_headers.insert(internal_header_name, internal_header_value);
+        builder = builder.headers(merged_headers);
+
         if let Some(b) = body {
             builder = builder.body(b);
         }
