@@ -119,7 +119,7 @@ pub async fn csrf_middleware(
         {
             return Ok(next.run(request).await);
         }
-        let cookie_token = extract_cookie_value(&request, &config.cookie_name);
+        let cookie_tokens = extract_cookie_values(&request, &config.cookie_name);
         let header_token = request
             .headers()
             .get(config.header_name.as_str())
@@ -129,15 +129,16 @@ pub async fn csrf_middleware(
         let request_id = extract_request_id(&request);
         let source_ip = extract_source_ip(&request);
 
-        let csrf_ok = matches!(
-            (&cookie_token, &header_token),
-            (Some(c), Some(h)) if !c.is_empty() && c == h
-        );
+        let csrf_ok = match &header_token {
+            Some(h) if !h.is_empty() => cookie_tokens.iter().any(|c| !c.is_empty() && c == h),
+            _ => false,
+        };
 
         if !csrf_ok {
-            let reason = match (&cookie_token, &header_token) {
-                (None, _) => "missing_csrf_cookie",
+            let reason = match (cookie_tokens.is_empty(), &header_token) {
+                (true, _) => "missing_csrf_cookie",
                 (_, None) => "missing_csrf_header",
+                (_, Some(h)) if h.is_empty() => "missing_csrf_header",
                 _ => "csrf_token_mismatch",
             };
 
@@ -192,20 +193,28 @@ fn is_state_changing(method: &Method) -> bool {
     )
 }
 
-/// Extract a single cookie value by name from the `Cookie` header.
-fn extract_cookie_value(req: &Request, name: &str) -> Option<String> {
+/// Extract all cookie values by name from the `Cookie` header.
+fn extract_cookie_values(req: &Request, name: &str) -> Vec<String> {
     req.headers()
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|pair| {
-                let pair = pair.trim();
-                let (k, v) = pair.split_once('=')?;
-                if k.trim() == name {
-                    Some(v.trim().to_owned())
-                } else {
-                    None
-                }
-            })
+        .map(|cookies| {
+            cookies
+                .split(';')
+                .filter_map(|pair| {
+                    let pair = pair.trim();
+                    let (k, v) = pair.split_once('=')?;
+                    if k.trim() == name {
+                        Some(v.trim().to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
         })
+        .unwrap_or_default()
+}
+
+fn extract_cookie_value(req: &Request, name: &str) -> Option<String> {
+    extract_cookie_values(req, name).into_iter().next()
 }
