@@ -7,9 +7,17 @@ pub mod middleware;
 pub mod rbac;
 pub mod tool_router;
 
-use axum::{extract::Request, http::HeaderName, middleware as axum_mw, response::Json, Router};
+use axum::{
+    body::Body,
+    extract::Request,
+    http::{HeaderName, HeaderValue, Method, StatusCode},
+    middleware as axum_mw,
+    response::{IntoResponse, Json, Response},
+    Router,
+};
 use serde::Serialize;
 use tower_http::{
+    cors::CorsLayer,
     request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -30,7 +38,6 @@ use crate::rbac::{Policy, PolicyEngine};
 use crate::tool_router::{ToolAuditCtx, ToolRequest, ToolRouter};
 use axum::extract::State;
 use axum::http::header;
-use axum::response::IntoResponse;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,6 +84,62 @@ async fn version() -> Json<VersionResponse> {
         service: SERVICE_NAME,
         version: VERSION,
     })
+}
+
+#[derive(Clone)]
+struct ApiProxyState {
+    client: reqwest::Client,
+    upstream_base: String,
+}
+
+async fn proxy_my_tasks(
+    State(state): State<ApiProxyState>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    let query = request.uri().query().unwrap_or("");
+    let url = if query.is_empty() {
+        format!("{}/api/my-tasks", state.upstream_base)
+    } else {
+        format!("{}/api/my-tasks?{}", state.upstream_base, query)
+    };
+
+    let mut upstream_req = state.client.get(url);
+
+    if let Some(cookie) = headers.get(header::COOKIE) {
+        upstream_req = upstream_req.header(header::COOKIE, cookie);
+    }
+    if let Some(authz) = headers.get(header::AUTHORIZATION) {
+        upstream_req = upstream_req.header(header::AUTHORIZATION, authz);
+    }
+
+    match upstream_req.send().await {
+        Ok(upstream) => {
+            let status = upstream.status();
+            let content_type = upstream
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .cloned()
+                .unwrap_or_else(|| HeaderValue::from_static("application/json"));
+            let body = upstream.bytes().await.unwrap_or_default();
+
+            let mut resp = Response::new(Body::from(body));
+            *resp.status_mut() = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            resp.headers_mut()
+                .insert(header::CONTENT_TYPE, content_type);
+            resp
+        }
+        Err(err) => {
+            let payload = serde_json::json!({
+                "error": {
+                    "code": 502,
+                    "kind": "upstream_unavailable",
+                    "message": format!("failed to reach tools API: {err}"),
+                }
+            });
+            (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,9 +302,18 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
     )
     .with_audit(audit.clone());
 
+    let proxy_state = ApiProxyState {
+        client: reqwest::Client::new(),
+        upstream_base: config.betterauth_base_url.trim_end_matches('/').to_string(),
+    };
+
     let mut router = Router::new()
         .route("/health", axum::routing::get(health))
         .route("/version", axum::routing::get(version))
+        .route(
+            "/api/my-tasks",
+            axum::routing::get(proxy_my_tasks).with_state(proxy_state),
+        )
         .route(
             "/v1/tools",
             axum::routing::get(list_tools).with_state(tool_router.clone()),
@@ -309,6 +381,25 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         audit: audit.clone(),
     };
 
+    let cors = CorsLayer::new()
+        .allow_origin([
+            "https://tools.greenhatsec.com"
+                .parse::<HeaderValue>()
+                .expect("valid tools origin"),
+            "https://admin.greenhatsec.com"
+                .parse::<HeaderValue>()
+                .expect("valid admin origin"),
+        ])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::COOKIE])
+        .allow_credentials(true);
+
     router
         .layer(axum_mw::from_fn_with_state(csrf, csrf_middleware))
         .layer(axum_mw::from_fn_with_state(validation, validate_request))
@@ -319,6 +410,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         // --- observability / request-id (outermost) ---
         // Header hardening should run at the edge.
         .layer(axum_mw::from_fn(header_hardening_middleware))
+        .layer(cors)
         .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
         .layer(
             TraceLayer::new_for_http().make_span_with(|req: &hyper::Request<_>| {
