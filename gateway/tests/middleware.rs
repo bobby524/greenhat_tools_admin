@@ -19,6 +19,7 @@ fn test_config(burst: u32) -> GatewayConfig {
         max_body_size: 256,
         csrf_enabled: false,
         csrf_cookie_name: "csrf_token".to_owned(),
+        csrf_cookie_domain: None,
         csrf_header_name: "x-csrf-token".to_owned(),
 
         auth_enabled: false,

@@ -21,6 +21,8 @@ pub struct GatewayConfig {
     pub csrf_cookie_name: String,
     /// Header name the SPA must echo the token into.
     pub csrf_header_name: String,
+    /// Optional CSRF cookie domain (e.g. `.greenhatsec.com`).
+    pub csrf_cookie_domain: Option<String>,
 
     // ── RBAC / Policy ────────────────────────────────────────────────────
     /// Path to a policy JSON file (see `docs/schemas/policy.v0.schema.json`).
@@ -50,6 +52,10 @@ impl GatewayConfig {
             csrf_enabled: parse_env("CSRF_ENABLED", true),
             csrf_cookie_name: parse_env("CSRF_COOKIE_NAME", "csrf_token".to_owned()),
             csrf_header_name: parse_env("CSRF_HEADER_NAME", "x-csrf-token".to_owned()),
+            csrf_cookie_domain: std::env::var("CSRF_COOKIE_DOMAIN")
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty()),
 
             policy_file: std::env::var("POLICY_FILE").ok(),
 

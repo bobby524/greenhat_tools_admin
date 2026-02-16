@@ -1036,6 +1036,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
     let csrf = CsrfConfig {
         enabled: config.csrf_enabled,
         cookie_name: config.csrf_cookie_name.clone(),
+        cookie_domain: config.csrf_cookie_domain.clone(),
         header_name: config.csrf_header_name.clone(),
         audit: audit.clone(),
         ..CsrfConfig::default()

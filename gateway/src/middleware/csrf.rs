@@ -19,6 +19,9 @@ pub struct CsrfConfig {
     /// Name of the cookie that carries the CSRF token
     /// (must be readable by JS → **not** HttpOnly).
     pub cookie_name: String,
+    /// Optional cookie domain (e.g. `.greenhatsec.com`) so the token can be
+    /// read on sibling subdomains and echoed to the gateway.
+    pub cookie_domain: Option<String>,
     /// Name of the request header the SPA echoes the token into.
     pub header_name: String,
     /// Paths that are unconditionally exempt from CSRF checks
@@ -33,6 +36,7 @@ impl Default for CsrfConfig {
         Self {
             enabled: true,
             cookie_name: "csrf_token".to_owned(),
+            cookie_domain: None,
             header_name: "x-csrf-token".to_owned(),
             exempt_paths: vec![
                 "/health".to_owned(),
@@ -155,13 +159,19 @@ pub async fn csrf_middleware(
         }
     }
 
+    let existing_csrf_cookie = extract_cookie_value(&request, &config.cookie_name);
+
     // ── Run the inner handler ────────────────────────────────────────────
     let mut response = next.run(request).await;
 
-    // ── Safe methods → issue / refresh the CSRF cookie ───────────────────
-    if !is_state_changing(&method) {
+    // ── Safe methods → issue CSRF cookie if missing ──────────────────────
+    if !is_state_changing(&method) && existing_csrf_cookie.is_none() {
         let token = uuid::Uuid::new_v4().to_string();
-        let cookie = format!("{}={}; Path=/; SameSite=Lax", config.cookie_name, token);
+        let mut cookie = format!("{}={}; Path=/; SameSite=Lax", config.cookie_name, token);
+        if let Some(domain) = &config.cookie_domain {
+            cookie.push_str(&format!("; Domain={domain}"));
+        }
+        cookie.push_str("; Secure");
         if let Ok(hv) = HeaderValue::from_str(&cookie) {
             response.headers_mut().append(header::SET_COOKIE, hv);
         }

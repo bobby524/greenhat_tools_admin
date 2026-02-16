@@ -18,6 +18,7 @@ fn csrf_config() -> GatewayConfig {
         max_body_size: 1_048_576,
         csrf_enabled: true,
         csrf_cookie_name: "csrf_token".to_owned(),
+        csrf_cookie_domain: None,
         csrf_header_name: "x-csrf-token".to_owned(),
 
         auth_enabled: false,
