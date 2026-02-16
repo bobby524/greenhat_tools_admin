@@ -33,7 +33,8 @@
         "dueAt": { "type": "string" },
         "labels": { "type": "array", "items": {} },
         "milestone": { "type": "string" },
-        "position": { "type": "number" }
+        "position": { "type": "number" },
+        "action": { "type": "string" }
       },
       "required": ["projectId", "title"],
       "additionalProperties": false

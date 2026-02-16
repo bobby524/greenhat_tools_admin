@@ -35,6 +35,7 @@ Option A (“shim”) means the gateway exposes these MCP tools but implements t
   - assigneeId → assignee_id
   - sprintId → sprint_id
   - dueAt → due_at
+  - action → action (archive/unarchive)
 
 #### delete_task
 - Args: taskId

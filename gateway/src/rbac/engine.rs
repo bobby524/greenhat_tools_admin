@@ -163,6 +163,14 @@ impl PolicyEngine {
             return Some("admin:audit");
         }
 
+        if path.starts_with("/api/exponential") {
+            return match method {
+                "GET" | "HEAD" | "OPTIONS" => Some("data:read"),
+                "POST" | "PUT" | "PATCH" | "DELETE" => Some("data:write"),
+                _ => None,
+            };
+        }
+
         // Generic API routes.
         match method {
             "GET" | "HEAD" | "OPTIONS" if path.starts_with("/v1/") => Some("data:read"),
@@ -341,6 +349,17 @@ mod tests {
         let p = principal(&["viewer"]);
         // viewer only has "data:read", not "tools:invoke"
         let d = engine.evaluate_route_access(&p, "POST", "/v1/tools/call");
+        assert!(!d.is_allowed());
+    }
+
+    #[test]
+    fn exponential_routes_require_data_permissions() {
+        let engine = PolicyEngine::new(test_policy());
+        let analyst = principal(&["analyst"]);
+        assert!(engine
+            .evaluate_route_access(&analyst, "GET", "/api/exponential/tasks")
+            .is_allowed());
+        let d = engine.evaluate_route_access(&analyst, "POST", "/api/exponential/tasks");
         assert!(!d.is_allowed());
     }
 

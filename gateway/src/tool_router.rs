@@ -1331,8 +1331,11 @@ fn validate_args(
                     serde_json::Value::String(v.to_owned()),
                 );
             }
-            if let Some(v) = params.get("stateId").and_then(|v| v.as_str()) {
-                body.insert("state_id".into(), serde_json::Value::String(v.to_owned()));
+            if let Some(v) = params.get("status").and_then(|v| v.as_str()) {
+                body.insert("status".into(), serde_json::Value::String(v.to_owned()));
+            }
+            if let Some(v) = params.get("priority").and_then(|v| v.as_i64()) {
+                body.insert("priority".into(), serde_json::Value::Number(v.into()));
             }
             if let Some(v) = params.get("assigneeId").and_then(|v| v.as_str()) {
                 body.insert(
@@ -1344,7 +1347,22 @@ fn validate_args(
                 body.insert("project_id".into(), serde_json::Value::String(v.to_owned()));
             }
             if let Some(v) = params.get("sprintId").and_then(|v| v.as_str()) {
-                body.insert("cycle_id".into(), serde_json::Value::String(v.to_owned()));
+                body.insert("sprint_id".into(), serde_json::Value::String(v.to_owned()));
+            }
+            if let Some(v) = params.get("dueAt").and_then(|v| v.as_str()) {
+                body.insert("due_at".into(), serde_json::Value::String(v.to_owned()));
+            }
+            if let Some(v) = params.get("labels") {
+                body.insert("labels".into(), v.clone());
+            }
+            if let Some(v) = params.get("milestone").and_then(|v| v.as_str()) {
+                body.insert("milestone".into(), serde_json::Value::String(v.to_owned()));
+            }
+            if let Some(v) = params.get("position").and_then(|v| v.as_i64()) {
+                body.insert("position".into(), serde_json::Value::Number(v.into()));
+            }
+            if let Some(v) = params.get("action").and_then(|v| v.as_str()) {
+                body.insert("action".into(), serde_json::Value::String(v.to_owned()));
             }
 
             let body_bytes = json_body(serde_json::Value::Object(body));

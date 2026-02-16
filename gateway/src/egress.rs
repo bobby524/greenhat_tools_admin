@@ -248,6 +248,8 @@ pub async fn resolve_host(host: &str, port: u16) -> Result<Vec<IpAddr>, EgressEr
 pub struct EgressClient {
     inner: Client,
     config: EgressConfig,
+    #[cfg(test)]
+    static_response: Option<EgressResponse>,
 }
 
 impl EgressClient {
@@ -260,7 +262,22 @@ impl EgressClient {
             .build()
             .expect("failed to build reqwest client");
 
-        Self { inner, config }
+        Self {
+            inner,
+            config,
+            #[cfg(test)]
+            static_response: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_static_response(mut self, status: u16, body: impl Into<Bytes>) -> Self {
+        self.static_response = Some(EgressResponse {
+            status,
+            headers: HeaderMap::new(),
+            body: body.into(),
+        });
+        self
     }
 
     /// Borrow the underlying config.
@@ -338,6 +355,11 @@ impl EgressClient {
         // Pre-flight
         let url = self.preflight(raw_url).await?;
 
+        #[cfg(test)]
+        if let Some(ref resp) = self.static_response {
+            return Ok(resp.clone());
+        }
+
         // Body size check
         if let Some(ref b) = body {
             if b.len() > self.config.max_request_body_bytes {
@@ -407,7 +429,7 @@ impl EgressClient {
 // ---------------------------------------------------------------------------
 
 /// The result of a successful egress request.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EgressResponse {
     pub status: u16,
     pub headers: reqwest::header::HeaderMap,

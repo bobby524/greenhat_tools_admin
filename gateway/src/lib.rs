@@ -16,7 +16,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use tower_http::{
     cors::CorsLayer,
@@ -143,15 +143,6 @@ async fn proxy_my_tasks(
             (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
         }
     }
-}
-
-async fn proxy_exponential(
-    State(state): State<ApiProxyState>,
-    Path(path): Path<String>,
-    headers: axum::http::HeaderMap,
-    request: Request,
-) -> Response {
-    proxy_api_path(state, format!("/api/exponential/{path}"), headers, request).await
 }
 
 async fn proxy_greenbooks(
@@ -282,22 +273,22 @@ fn extract_user_agent(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-async fn call_tool(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
-    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
-    Json(payload): Json<ToolRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let request_id = request_id
+fn request_id_from_extension(request_id: Option<axum::extract::Extension<RequestId>>) -> String {
+    request_id
         .as_ref()
         .and_then(|id| id.header_value().to_str().ok())
         .unwrap_or("unknown")
-        .to_owned();
+        .to_owned()
+}
 
-    let source_ip = extract_source_ip(&headers);
-    let user_agent = extract_user_agent(&headers);
-
+fn build_tool_audit_ctx(
+    headers: &axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+) -> ToolAuditCtx {
+    let request_id = request_id_from_extension(request_id);
+    let source_ip = extract_source_ip(headers);
+    let user_agent = extract_user_agent(headers);
     let actor = principal.map(|p| crate::audit::actor_from_principal(&p.0));
 
     let upstream_authorization = headers
@@ -310,7 +301,7 @@ async fn call_tool(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
 
-    let ctx = ToolAuditCtx {
+    ToolAuditCtx {
         request_id,
         source_ip,
         user_agent,
@@ -318,10 +309,446 @@ async fn call_tool(
         upstream_authorization,
         upstream_cookie,
         cancel: None,
-    };
+    }
+}
+
+fn exponential_upstream_base() -> String {
+    std::env::var("EXPONENTIAL_API_BASE_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://tools.greenhatsec.com".to_owned())
+}
+
+async fn call_tool(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Json(payload): Json<ToolRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
 
     let result = router.execute(payload, ctx).await;
     Ok(Json(result))
+}
+
+fn body_to_object(body: Value, request_id: &str) -> Result<Map<String, Value>, AppError> {
+    body.as_object()
+        .cloned()
+        .ok_or_else(|| {
+            AppError::bad_request("request body must be a JSON object").with_request_id(request_id)
+        })
+}
+
+fn pick_value<'a>(map: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|k| map.get(*k))
+}
+
+fn task_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = Map::new();
+    if let Some(v) = pick_value(body, &["projectId", "project_id"]) {
+        params.insert("projectId".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["title"]) {
+        params.insert("title".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["description"]) {
+        params.insert("description".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["status"]) {
+        params.insert("status".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["priority"]) {
+        params.insert("priority".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["assigneeId", "assignee_id"]) {
+        params.insert("assigneeId".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["sprintId", "sprint_id"]) {
+        params.insert("sprintId".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["dueAt", "due_at"]) {
+        params.insert("dueAt".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["labels"]) {
+        params.insert("labels".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["milestone"]) {
+        params.insert("milestone".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["position"]) {
+        params.insert("position".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["action"]) {
+        params.insert("action".into(), v.clone());
+    }
+    params
+}
+
+fn sprint_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = Map::new();
+    if let Some(v) = pick_value(body, &["projectId", "project_id"]) {
+        params.insert("projectId".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["name"]) {
+        params.insert("name".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["startDate", "start_date"]) {
+        params.insert("startDate".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["endDate", "end_date"]) {
+        params.insert("endDate".into(), v.clone());
+    }
+    params
+}
+
+fn project_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = Map::new();
+    if let Some(v) = pick_value(body, &["teamId", "team_id"]) {
+        params.insert("teamId".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["name"]) {
+        params.insert("name".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["description"]) {
+        params.insert("description".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["color"]) {
+        params.insert("color".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["icon"]) {
+        params.insert("icon".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["sprintDurationDays", "sprint_duration_days"]) {
+        params.insert("sprintDurationDays".into(), v.clone());
+    }
+    if let Some(v) = pick_value(body, &["startDate", "start_date"]) {
+        params.insert("startDate".into(), v.clone());
+    }
+    params
+}
+
+fn tool_result_response(result: crate::tool_router::ToolResult, request_id: &str) -> Response {
+    if result.success {
+        let status = result.status.unwrap_or(StatusCode::OK.as_u16());
+        let mut resp = Response::new(Body::from(result.data));
+        *resp.status_mut() =
+            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        resp.headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        return resp;
+    }
+
+    let payload = serde_json::json!({
+        "error": {
+            "code": 502,
+            "kind": "upstream_error",
+            "message": result.data,
+            "request_id": request_id,
+        }
+    });
+    (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
+}
+
+async fn execute_exponential_tool(
+    router: ToolRouter,
+    ctx: ToolAuditCtx,
+    tool: &str,
+    params: Value,
+) -> Response {
+    let request_id = ctx.request_id.clone();
+    let result = router
+        .execute(
+            ToolRequest {
+                tool: tool.to_owned(),
+                params,
+            },
+            ctx,
+        )
+        .await;
+    tool_result_response(result, &request_id)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTasksQuery {
+    project_id: Option<String>,
+    assignee_id: Option<String>,
+    status: Option<String>,
+    sprint_id: Option<String>,
+    team_id: Option<String>,
+    search: Option<String>,
+    include_archived: Option<bool>,
+    limit: Option<u64>,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSprintsQuery {
+    project_id: Option<String>,
+    state: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListProjectsQuery {
+    team_id: Option<String>,
+    include_archived: Option<bool>,
+}
+
+async fn list_exponential_tasks(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Query(query): Query<ListTasksQuery>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let mut params = Map::new();
+    if let Some(v) = query.project_id {
+        params.insert("projectId".into(), Value::String(v));
+    }
+    if let Some(v) = query.assignee_id {
+        params.insert("assigneeId".into(), Value::String(v));
+    }
+    if let Some(v) = query.status {
+        params.insert("status".into(), Value::String(v));
+    }
+    if let Some(v) = query.sprint_id {
+        params.insert("sprintId".into(), Value::String(v));
+    }
+    if let Some(v) = query.team_id {
+        params.insert("teamId".into(), Value::String(v));
+    }
+    if let Some(v) = query.search {
+        params.insert("search".into(), Value::String(v));
+    }
+    if let Some(v) = query.include_archived {
+        params.insert("includeArchived".into(), Value::Bool(v));
+    }
+    if let Some(v) = query.limit {
+        params.insert("limit".into(), Value::Number(serde_json::Number::from(v)));
+    }
+    if let Some(v) = query.cursor {
+        params.insert("cursor".into(), Value::String(v));
+    }
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "list_tasks",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn create_exponential_task(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let request_id = ctx.request_id.clone();
+    let body = body_to_object(body, &request_id)?;
+    let params = task_params_from_body(&body);
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "create_task",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn get_exponential_task(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(task_id): Path<String>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let params = serde_json::json!({ "taskId": task_id });
+    Ok(execute_exponential_tool(router, ctx, "get_task", params).await)
+}
+
+async fn update_exponential_task(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(task_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let request_id = ctx.request_id.clone();
+    let body = body_to_object(body, &request_id)?;
+    let mut params = task_params_from_body(&body);
+    params.insert("taskId".into(), Value::String(task_id));
+    if params.len() == 1 {
+        return Err(AppError::bad_request("no fields to update").with_request_id(request_id));
+    }
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "update_task",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn delete_exponential_task(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(task_id): Path<String>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let params = serde_json::json!({ "taskId": task_id });
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "delete_task",
+        params,
+    )
+    .await)
+}
+
+async fn list_exponential_sprints(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Query(query): Query<ListSprintsQuery>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let mut params = Map::new();
+    if let Some(v) = query.project_id {
+        params.insert("projectId".into(), Value::String(v));
+    }
+    if let Some(v) = query.state {
+        params.insert("state".into(), Value::String(v));
+    }
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "list_sprints",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn create_exponential_sprint(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let request_id = ctx.request_id.clone();
+    let body = body_to_object(body, &request_id)?;
+    let params = sprint_params_from_body(&body);
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "create_sprint",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn get_exponential_sprint(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(sprint_id): Path<String>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let params = serde_json::json!({ "sprintId": sprint_id });
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "get_sprint",
+        params,
+    )
+    .await)
+}
+
+async fn list_exponential_projects(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Query(query): Query<ListProjectsQuery>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let mut params = Map::new();
+    if let Some(v) = query.team_id {
+        params.insert("teamId".into(), Value::String(v));
+    }
+    if let Some(v) = query.include_archived {
+        params.insert("includeArchived".into(), Value::Bool(v));
+    }
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "list_projects",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn create_exponential_project(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let request_id = ctx.request_id.clone();
+    let body = body_to_object(body, &request_id)?;
+    let params = project_params_from_body(&body);
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "create_project",
+        Value::Object(params),
+    )
+    .await)
+}
+
+async fn get_exponential_project(
+    State(router): State<ToolRouter>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(project_id): Path<String>,
+) -> Result<Response, AppError> {
+    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
+    let params = serde_json::json!({ "projectId": project_id });
+    Ok(execute_exponential_tool(
+        router,
+        ctx,
+        "get_project",
+        params,
+    )
+    .await)
+}
+
+async fn proxy_exponential_passthrough(
+    State(state): State<ApiProxyState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    proxy_api_path(state, format!("/api/exponential/{path}"), headers, request).await
 }
 
 #[derive(Deserialize)]
@@ -646,6 +1073,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         upstream_base: config.betterauth_base_url.trim_end_matches('/').to_string(),
     };
 
+    let exponential_proxy_state = ApiProxyState {
+        client: reqwest::Client::new(),
+        upstream_base: exponential_upstream_base(),
+    };
+
     let mut router = Router::new()
         .route("/health", axum::routing::get(health))
         .route("/version", axum::routing::get(version))
@@ -654,8 +1086,42 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(proxy_my_tasks).with_state(proxy_state.clone()),
         )
         .route(
+            "/api/exponential/tasks",
+            axum::routing::get(list_exponential_tasks)
+                .post(create_exponential_task)
+                .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/tasks/{task_id}",
+            axum::routing::get(get_exponential_task)
+                .patch(update_exponential_task)
+                .delete(delete_exponential_task)
+                .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/sprints",
+            axum::routing::get(list_exponential_sprints)
+                .post(create_exponential_sprint)
+                .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/sprints/{sprint_id}",
+            axum::routing::get(get_exponential_sprint).with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/projects",
+            axum::routing::get(list_exponential_projects)
+                .post(create_exponential_project)
+                .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/projects/{project_id}",
+            axum::routing::get(get_exponential_project).with_state(tool_router.clone()),
+        )
+        .route(
             "/api/exponential/{*path}",
-            axum::routing::any(proxy_exponential).with_state(proxy_state.clone()),
+            axum::routing::any(proxy_exponential_passthrough)
+                .with_state(exponential_proxy_state),
         )
         .route(
             "/api/greenbooks/{*path}",
@@ -788,4 +1254,143 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             }),
         )
         .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::middleware::{self as axum_mw, Next};
+    use axum::routing::get;
+    use http_body_util::BodyExt;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    use crate::auth::{AuthMethod, Principal};
+    use crate::egress::{EgressClient, EgressConfig};
+    use crate::middleware::rbac::{rbac_middleware, RbacState};
+    use crate::rbac::{Policy, PolicyEngine};
+    use crate::tool_router::{ToolRuntimeConfig, ToolRuntimeToolConfig};
+
+    async fn body_json(resp: Response) -> serde_json::Value {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn test_policy() -> Policy {
+        Policy::load_from_str(
+            r#"{
+                "schema_version": "0.1.0",
+                "roles": {
+                    "analyst": { "permissions": ["data:read"] }
+                }
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn test_principal() -> Principal {
+        Principal {
+            user_id: "test-user".into(),
+            org_id: None,
+            roles: vec!["analyst".into()],
+            session_id: "test-session".into(),
+            auth_method: AuthMethod::Bearer,
+        }
+    }
+
+    fn build_tool_router() -> ToolRouter {
+        let mut allowed_hosts = HashSet::new();
+        allowed_hosts.insert("example.com".to_owned());
+        let egress_cfg = EgressConfig {
+            allowed_hosts,
+            deny_private_ips: false,
+            ..EgressConfig::default()
+        };
+
+        let mut tool_cfg = ToolRuntimeConfig::builtins();
+        tool_cfg.tools.insert(
+            "list_tasks".into(),
+            ToolRuntimeToolConfig {
+                enabled: true,
+                timeout: Duration::from_secs(5),
+                max_concurrent: 4,
+            },
+        );
+
+        let response = serde_json::json!({
+            "tasks": [{ "id": "task_1" }],
+            "nextCursor": null
+        })
+        .to_string();
+
+        let egress = EgressClient::new(egress_cfg).with_static_response(200, response);
+        ToolRouter::new_with_config(egress, tool_cfg)
+    }
+
+    fn build_router(
+        tool_router: ToolRouter,
+        rbac_state: RbacState,
+        principal: Option<Principal>,
+    ) -> Router {
+        let mut router = Router::new().route(
+            "/api/exponential/tasks",
+            get(list_exponential_tasks).with_state(tool_router),
+        );
+
+        router = router.layer(axum_mw::from_fn_with_state(rbac_state, rbac_middleware));
+
+        if let Some(p) = principal {
+            router = router.layer(axum_mw::from_fn(move |mut req: Request<Body>, next: Next| {
+                let p = p.clone();
+                async move {
+                    req.extensions_mut().insert(p);
+                    next.run(req).await
+                }
+            }));
+        }
+
+        router
+    }
+
+    #[tokio::test]
+    async fn exponential_tasks_auth_and_shape() {
+        std::env::set_var("EXPONENTIAL_API_BASE_URL", "https://example.com");
+
+        let tool_router = build_tool_router();
+        let policy = test_policy();
+        let engine = Arc::new(PolicyEngine::new(policy));
+        let rbac_state = RbacState::new(engine, AuditLog::from_env());
+
+        let unauth_router = build_router(tool_router.clone(), rbac_state.clone(), None);
+        let resp = unauth_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/tasks")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let authed_router = build_router(tool_router, rbac_state, Some(test_principal()));
+        let resp = authed_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/tasks")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("tasks").and_then(|v| v.as_array()).is_some());
+    }
 }

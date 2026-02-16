@@ -157,6 +157,15 @@ Keep it short, factual, and link to commits/files.
 
 ---
 
+## 2026-02-15 — Exponential gateway migration (phase 1)
+
+### Gateway-owned Exponential surface ✅
+- Added first-class `/api/exponential/*` handlers for tasks/sprints/projects that route through the tool router (egress allowlist + audit), with JSON body mapping from snake_case payloads to canonical tool params.
+- Updated RBAC mapping to enforce `data:read`/`data:write` on `/api/exponential/*` routes.
+- Added update-task mapping parity (status/priority/dueAt/labels/milestone/position/action) and schema sync for `action`.
+- Added auth/shape test for `/api/exponential/tasks` and route mapping test for RBAC.
+- Files: `gateway/src/lib.rs`, `gateway/src/rbac/engine.rs`, `gateway/src/tool_router.rs`, `gateway/src/lib.rs` (tests), `docs/schemas/exponential_tools.v0.schema.json`, `docs/EXponential_TOOL_MIGRATION_PLAN.md`.
+
 ## Tooling
 
 ### CodeGraphContext (codegraph MCP)
