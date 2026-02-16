@@ -1,0 +1,96 @@
+# ============================================================
+# CI — Rust quality gates + Docker image build + GHCR publish
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write          # needed for GHCR push
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/api-mcp-gateway
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Rust lint + test
+  # ------------------------------------------------------------------
+  rust:
+    name: Rust (fmt / clippy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive          # vendor/mcp-rust-sdk
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (gateway)
+        run: cargo clippy -p gateway --all-targets -- -D warnings
+
+      # mcp-spike is a POC — lint without -D warnings since it pulls
+      # vendored rmcp which has its own clippy findings.
+      - name: cargo clippy (mcp-spike, advisory)
+        run: cargo clippy -p mcp-spike --all-targets 2>&1 || true
+
+      - name: cargo test
+        run: cargo test -p gateway -p mcp-spike
+
+  # ------------------------------------------------------------------
+  # 2. Docker build (always) + GHCR publish (main only)
+  # ------------------------------------------------------------------
+  docker:
+    name: Docker build & publish
+    runs-on: ubuntu-latest
+    needs: rust                         # gate on lint+test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Authenticate to GHCR only on push-to-main (PRs skip publish)
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

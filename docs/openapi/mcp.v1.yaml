@@ -1,0 +1,169 @@
+openapi: 3.0.3
+info:
+  title: GreenHat MCP Gateway API
+  version: v1
+servers:
+  - url: https://api.greenhatsec.com
+paths:
+  /mcp/v1/tools:
+    get:
+      summary: List allowed tools
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Tool'
+                required: [tools]
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /mcp/v1/tools/{tool_name}:call:
+    post:
+      summary: Call a tool
+      parameters:
+        - name: tool_name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolCallRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolCallResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /mcp/v1/validate:
+    post:
+      summary: Validate a tool call without executing it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolCallValidateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowed: { type: boolean }
+                  reason: { type: string, nullable: true }
+                  validation_errors:
+                    type: array
+                    items: { type: string }
+                required: [allowed, validation_errors]
+components:
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: Too Many Requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    InternalError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+    Tool:
+      type: object
+      properties:
+        name: { type: string }
+        title: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        input_schema:
+          description: JSONSchema for tool arguments
+          type: object
+          additionalProperties: true
+      required: [name, input_schema]
+    ToolCallContext:
+      type: object
+      properties:
+        origin: { type: string, nullable: true }
+        source: { type: string, nullable: true }
+        trace:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+    ToolCallRequest:
+      type: object
+      properties:
+        call_id:
+          type: string
+          description: Client-generated idempotency key
+        arguments:
+          type: object
+          additionalProperties: true
+        context:
+          $ref: '#/components/schemas/ToolCallContext'
+      required: [call_id, arguments]
+    ToolCallResponse:
+      type: object
+      properties:
+        call_id: { type: string }
+        tool_name: { type: string }
+        result:
+          type: object
+          nullable: true
+          additionalProperties: true
+        error:
+          type: object
+          nullable: true
+          properties:
+            code: { type: string }
+            message: { type: string }
+          required: [code, message]
+      required: [call_id, tool_name]
+    ToolCallValidateRequest:
+      type: object
+      properties:
+        tool_name: { type: string }
+        arguments:
+          type: object
+          additionalProperties: true
+      required: [tool_name, arguments]

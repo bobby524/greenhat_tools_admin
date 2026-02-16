@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greenhatsec.com/schemas/exponential_tools.v0.schema.json",
+  "title": "Exponential tool schemas (v0)",
+  "type": "object",
+  "description": "Input schemas for Exponential MCP tools as exposed by API_MCP_Gateway. Canonical naming uses tasks/sprints (not issues/cycles).",
+  "properties": {
+    "list_tasks": {
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "assigneeId": { "type": "string" },
+        "status": { "type": "string" },
+        "sprintId": { "type": "string" },
+        "teamId": { "type": "string" },
+        "search": { "type": "string" },
+        "includeArchived": { "type": "boolean", "default": false },
+        "limit": { "type": "number", "default": 50 },
+        "cursor": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "create_task": {
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "number" },
+        "assigneeId": { "type": "string" },
+        "sprintId": { "type": "string" },
+        "dueAt": { "type": "string" },
+        "labels": { "type": "array", "items": {} },
+        "milestone": { "type": "string" },
+        "position": { "type": "number" }
+      },
+      "required": ["projectId", "title"],
+      "additionalProperties": false
+    },
+    "get_task": {
+      "type": "object",
+      "properties": { "taskId": { "type": "string" } },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "update_task": {
+      "type": "object",
+      "properties": {
+        "taskId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "number" },
+        "assigneeId": { "type": "string" },
+        "sprintId": { "type": "string" },
+        "dueAt": { "type": "string" },
+        "labels": { "type": "array", "items": {} },
+        "milestone": { "type": "string" },
+        "position": { "type": "number" }
+      },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "delete_task": {
+      "type": "object",
+      "properties": { "taskId": { "type": "string" } },
+      "required": ["taskId"],
+      "additionalProperties": false
+    },
+    "list_sprints": {
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "state": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "create_sprint": {
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "name": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" }
+      },
+      "required": ["projectId"],
+      "additionalProperties": false
+    },
+    "get_sprint": {
+      "type": "object",
+      "properties": { "sprintId": { "type": "string" } },
+      "required": ["sprintId"],
+      "additionalProperties": false
+    },
+    "list_projects": {
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "includeArchived": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "create_project": {
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "sprintDurationDays": { "type": "number" },
+        "startDate": { "type": "string" }
+      },
+      "required": ["teamId", "name"],
+      "additionalProperties": false
+    },
+    "get_project": {
+      "type": "object",
+      "properties": { "projectId": { "type": "string" } },
+      "required": ["projectId"],
+      "additionalProperties": false
+    },
+    "get_audit_logs": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

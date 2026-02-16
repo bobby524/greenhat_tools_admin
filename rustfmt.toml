@@ -1,0 +1,5 @@
+# Repo-local rustfmt config.
+# NOTE: vendored MCP SDK uses nightly-only rustfmt settings; keep this stable.
+edition = "2021"
+max_width = 100
+newline_style = "Unix"

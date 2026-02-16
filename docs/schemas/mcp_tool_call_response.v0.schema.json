@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greenhatsec.com/schemas/mcp_tool_call_response.v0.schema.json",
+  "title": "MCP Tool Call Response (Gateway)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "call_id": { "type": "string" },
+    "tool_name": { "type": "string" },
+    "result": { "type": ["object", "null"], "additionalProperties": true },
+    "error": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["code", "message"]
+    }
+  },
+  "required": ["call_id", "tool_name"]
+}

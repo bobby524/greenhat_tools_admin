@@ -1,90 +1,47 @@
-version: '3.8'
-
 services:
-  # Admin Web App
-  greenhat-admin:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: greenhat-admin
-    restart: unless-stopped
     ports:
-      - "127.0.0.1:4000:4000"  # Only localhost (WireGuard)
+      - "8080:8080"
+    # Loads .env at compose-up time; values are injected into the container.
+    # Only .env.example is committed — operators copy it to .env locally.
+    env_file:
+      - .env
     environment:
-      # Database
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      
-      # Admin MCP
-      - ADMIN_MCP_URL=http://greenhat-admin-mcp:4002
-      - ADMIN_MCP_TOKEN=${ADMIN_MCP_TOKEN}
-      
-      # Admin Auth
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}
-      
-      # Security
-      - NODE_ENV=production
-      
-    networks:
-      - admin-internal
-    volumes:
-      - ./logs:/app/logs
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "10"
+      # Explicit overrides (always applied, take precedence over .env).
+      - RUST_LOG=gateway=debug,tower_http=debug
+      # Set REDIS_URL to enable caching; omit or leave empty to run without.
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    # healthcheck using the /health endpoint
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
-  # Admin MCP Server
-  greenhat-admin-mcp:
-    build:
-      context: ./mcp-admin
-      dockerfile: Dockerfile
-    container_name: greenhat-admin-mcp
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:4002:4002"  # Only localhost
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - MCP_PORT=4002
-      - MCP_AUTH_TOKEN=${ADMIN_MCP_TOKEN}
-      - LOG_LEVEL=info
-    networks:
-      - admin-internal
-    volumes:
-      - ./mcp-admin/logs:/app/logs
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "10"
-
-  # WireGuard VPN
-  wireguard:
-    image: linuxserver/wireguard
-    container_name: greenhat-wireguard
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - SERVERURL=${WIREGUARD_SERVER_URL}
-      - SERVERPORT=51820
-      - PEERS=admin1,admin2,admin3
-      - PEERDNS=auto
-      - INTERNAL_SUBNET=10.13.13.0
-    volumes:
-      - ./wireguard:/config
-      - /lib/modules:/lib/modules
-    ports:
-      - "51820:51820/udp"
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
-    restart: unless-stopped
-
-networks:
-  admin-internal:
-    internal: true
+volumes:
+  redis-data:

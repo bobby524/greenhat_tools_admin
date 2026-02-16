@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greenhatsec.com/schemas/mcp_tool_call_request.v0.schema.json",
+  "title": "MCP Tool Call Request (Gateway)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "call_id": {
+      "type": "string",
+      "description": "Client-generated idempotency key"
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "origin": { "type": "string" },
+        "source": { "type": "string" },
+        "trace": { "type": "object", "additionalProperties": true }
+      }
+    }
+  },
+  "required": ["call_id", "arguments"]
+}

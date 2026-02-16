@@ -1,0 +1,26 @@
+[workspace]
+members = ["gateway", "mcp-spike"]
+# Vendored rmcp crates are present in-tree to satisfy workspace inheritance,
+# but they are not part of the gateway test surface.
+default-members = ["gateway", "mcp-spike"]
+resolver = "2"
+
+# These fields are required because the vendored rmcp crates use
+# `{ workspace = true }` inheritance.  Cargo resolves workspace fields
+# from *this* root when the crates live inside our tree.
+[workspace.package]
+edition     = "2024"
+version     = "0.15.0"
+authors     = ["4t145 <u4t145@163.com>"]
+license      = "Apache-2.0"
+license-file = "LICENSE"
+repository  = "https://github.com/modelcontextprotocol/rust-sdk/"
+description = "Rust SDK for Model Context Protocol"
+homepage    = "https://github.com/modelcontextprotocol/rust-sdk"
+readme      = "README.md"
+
+# Workspace-level dependency aliases so rmcp-macros can resolve its
+# `rmcp = { workspace = true }` reference.
+[workspace.dependencies]
+rmcp        = { version = "0.15.0", path = "./vendor/mcp-rust-sdk/crates/rmcp" }
+rmcp-macros = { version = "0.15.0", path = "./vendor/mcp-rust-sdk/crates/rmcp-macros" }

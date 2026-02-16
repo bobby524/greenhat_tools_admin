@@ -1,0 +1,48 @@
+{
+  "schema_version": "0.1.0",
+  "id": "dev-exponential-local",
+  "roles": {
+    "admin": {
+      "permissions": ["*"],
+      "tools": ["*"]
+    },
+    "analyst": {
+      "permissions": ["tools:list", "tools:invoke"],
+      "tools": [
+        "list_tasks",
+        "create_task",
+        "get_task",
+        "update_task",
+        "delete_task",
+        "list_sprints",
+        "create_sprint",
+        "get_sprint",
+        "list_projects",
+        "create_project",
+        "get_project",
+        "get_audit_logs"
+      ]
+    }
+  },
+  "tools": {
+    "default_policy": "deny",
+    "max_concurrent_global": 16,
+    "allowlist": {
+      "list_tasks": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 8, "allowed_roles": ["analyst", "admin"]},
+      "create_task": {"enabled": true, "timeout_ms": 20000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+      "get_task": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 8, "allowed_roles": ["analyst", "admin"]},
+      "update_task": {"enabled": true, "timeout_ms": 20000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+      "delete_task": {"enabled": true, "timeout_ms": 20000, "max_concurrent": 2, "allowed_roles": ["analyst", "admin"]},
+
+      "list_sprints": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+      "create_sprint": {"enabled": true, "timeout_ms": 20000, "max_concurrent": 2, "allowed_roles": ["analyst", "admin"]},
+      "get_sprint": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+
+      "list_projects": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+      "create_project": {"enabled": true, "timeout_ms": 20000, "max_concurrent": 2, "allowed_roles": ["analyst", "admin"]},
+      "get_project": {"enabled": true, "timeout_ms": 10000, "max_concurrent": 4, "allowed_roles": ["analyst", "admin"]},
+
+      "get_audit_logs": {"enabled": true, "timeout_ms": 5000, "max_concurrent": 1, "allowed_roles": ["analyst", "admin"]}
+    }
+  }
+}

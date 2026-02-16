@@ -1,9 +1,4 @@
-.vercel
-.env*.local
-.next
-<<<<<<< HEAD
-node_modules
-tsconfig.tsbuildinfo
-=======
-node_modules/
->>>>>>> fix-auth-deploy
+/target
+**/*.rs.bk
+*.pdb
+.env

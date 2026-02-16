@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api-mcp-gateway.local/schemas/policy.v0.schema.json",
+  "title": "API MCP Gateway — Policy Configuration",
+  "description": "Versioned policy document controlling rate limits, tool access, egress, auth, and RBAC.",
+  "type": "object",
+  "required": ["schema_version"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^0\\.\\d+\\.\\d+$",
+      "description": "Semver policy schema version. Loader rejects unknown major versions."
+    },
+    "id": {
+      "type": "string",
+      "description": "Human-readable policy label."
+    },
+
+    "rate_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ip":   { "$ref": "#/$defs/rate_limit_bucket" },
+        "user": { "$ref": "#/$defs/rate_limit_bucket" },
+        "tool": { "$ref": "#/$defs/rate_limit_bucket" },
+        "endpoint_overrides": {
+          "type": "object",
+          "description": "Route pattern → rate limit bucket (or null to exempt).",
+          "additionalProperties": {
+            "oneOf": [
+              { "$ref": "#/$defs/rate_limit_bucket" },
+              { "type": "null" }
+            ]
+          }
+        }
+      }
+    },
+
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_policy": {
+          "type": "string",
+          "enum": ["deny", "allow"],
+          "default": "deny"
+        },
+        "max_concurrent_global": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 32
+        },
+        "allowlist": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/tool_entry" }
+        }
+      }
+    },
+
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_policy": {
+          "type": "string",
+          "enum": ["deny", "allow"],
+          "default": "deny"
+        },
+        "allowlist": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/egress_entry" }
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10485760
+        }
+      }
+    },
+
+    "auth": {
+      "type": "object",
+      "properties": {
+        "modes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Enabled auth mechanisms."
+        },
+        "session_cookie": {
+          "type": "object",
+          "properties": {
+            "cookie_name": { "type": "string" },
+            "validation_url": { "type": "string", "format": "uri" },
+            "csrf": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "header":  { "type": "string", "default": "x-csrf-token" },
+                "method":  { "type": "string", "enum": ["double_submit", "signed_token"] }
+              },
+              "required": ["enabled"]
+            }
+          }
+        },
+        "bearer_jwt": {
+          "type": "object",
+          "properties": {
+            "issuer":   { "type": "string" },
+            "audience": { "type": "string" },
+            "jwks_url": { "type": "string", "format": "uri" },
+            "jwks_refresh_interval_secs": { "type": "integer", "minimum": 60 },
+            "required_claims": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "anonymous_routes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Routes that skip authentication."
+        }
+      }
+    },
+
+    "roles": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/role_entry" }
+    }
+  },
+
+  "$defs": {
+    "rate_limit_bucket": {
+      "type": "object",
+      "required": ["requests_per_second", "burst"],
+      "additionalProperties": false,
+      "properties": {
+        "requests_per_second": { "type": "number", "exclusiveMinimum": 0 },
+        "burst":               { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "tool_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled":        { "type": "boolean", "default": true },
+        "timeout_ms":     { "type": "integer", "minimum": 1, "default": 30000 },
+        "max_concurrent": { "type": "integer", "minimum": 1, "default": 8 },
+        "allowed_roles":  { "type": "array", "items": { "type": "string" }, "default": [] },
+        "args_schema":    { "type": ["string", "null"], "default": null }
+      }
+    },
+
+    "egress_entry": {
+      "type": "object",
+      "required": ["ports", "protocol"],
+      "additionalProperties": false,
+      "properties": {
+        "host":     { "type": "string" },
+        "cidr":     { "type": "string" },
+        "ports":    { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+        "protocol": { "type": "string", "enum": ["https", "http", "tcp"] },
+        "label":    { "type": "string" }
+      },
+      "oneOf": [
+        { "required": ["host"] },
+        { "required": ["cidr"] }
+      ]
+    },
+
+    "role_entry": {
+      "type": "object",
+      "required": ["permissions"],
+      "additionalProperties": false,
+      "properties": {
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

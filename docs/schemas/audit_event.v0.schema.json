@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api-mcp-gateway.local/schemas/audit_event.v0.schema.json",
+  "title": "API MCP Gateway — Audit Event",
+  "description": "Append-only audit event envelope with type-specific payload.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "timestamp",
+    "schema_version",
+    "request_id",
+    "source_ip",
+    "actor",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Globally unique, lexicographically sortable ID (ULIDv2 / UUIDv7)."
+    },
+    "event_type": {
+      "type": "string",
+      "pattern": "^[a-z]+\\.[a-z_]+$",
+      "description": "Dotted event type: <domain>.<action>.",
+      "examples": [
+        "auth.login_success",
+        "auth.login_failure",
+        "auth.csrf_reject",
+        "authz.allowed",
+        "authz.denied",
+        "tool.invoke_start",
+        "tool.invoke_success",
+        "tool.invoke_failure",
+        "tool.invoke_rejected",
+        "policy.loaded",
+        "policy.reload_failed",
+        "policy.rate_limit_hit",
+        "gateway.started",
+        "gateway.stopped",
+        "gateway.egress_blocked"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp in UTC."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Audit schema semver."
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Correlation ID from x-request-id header."
+    },
+    "source_ip": {
+      "type": "string",
+      "description": "Client IP address (after proxy unwrap)."
+    },
+    "user_agent": {
+      "type": "string",
+      "description": "Raw User-Agent header (optional)."
+    },
+    "actor": {
+      "oneOf": [
+        { "$ref": "#/$defs/actor" },
+        { "type": "null" }
+      ],
+      "description": "Authenticated identity, or null for unauthenticated requests."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-type-specific data. Schema varies by event_type.",
+      "additionalProperties": true
+    }
+  },
+
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "required": ["user_id", "auth_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "description": "Canonical user identifier."
+        },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Roles resolved at auth time."
+        },
+        "auth_mode": {
+          "type": "string",
+          "enum": ["session_cookie", "bearer_jwt"],
+          "description": "Authentication mechanism used."
+        }
+      }
+    }
+  }
+}

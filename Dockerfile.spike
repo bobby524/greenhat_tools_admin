@@ -1,0 +1,39 @@
+# Dockerfile.spike — Proves the workspace compiles against the vendored MCP SDK
+# inside a clean container (no host toolchain leakage).
+#
+# Usage:
+#   docker build -f Dockerfile.spike -t mcp-spike .
+#   docker run --rm mcp-spike
+
+FROM rust:1.90-bookworm AS builder
+
+WORKDIR /build
+
+# 1. Copy workspace manifest + member manifests first (layer cache).
+COPY Cargo.toml Cargo.toml
+COPY gateway/Cargo.toml gateway/Cargo.toml
+COPY mcp-spike/Cargo.toml mcp-spike/Cargo.toml
+
+# 2. Copy vendored SDK (needed for path deps to resolve).
+COPY vendor/ vendor/
+
+# 3. Create stub sources so `cargo fetch` can resolve everything.
+RUN mkdir -p gateway/src && echo 'fn main(){}' > gateway/src/main.rs && \
+    mkdir -p mcp-spike/src && echo 'fn main(){}' > mcp-spike/src/main.rs
+
+# 4. Pre-fetch deps (cached unless Cargo.toml changes).
+RUN cargo fetch --locked 2>/dev/null || cargo fetch
+
+# 5. Copy real source.
+COPY gateway/src/ gateway/src/
+COPY mcp-spike/src/ mcp-spike/src/
+
+# 6. Build mcp-spike in release mode.
+RUN cargo build -p mcp-spike --release
+
+# --- Runtime stage ---
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/mcp-spike /usr/local/bin/mcp-spike
+
+CMD ["mcp-spike"]

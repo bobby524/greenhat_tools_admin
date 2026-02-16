@@ -1,0 +1,50 @@
+{
+  "schema_version": "0.1.0",
+  "id": "local-dev",
+
+  "tools": {
+    "default_policy": "deny",
+    "max_concurrent_global": 16,
+    "allowlist": {
+      "web_search": {
+        "enabled": true,
+        "timeout_ms": 10000,
+        "max_concurrent": 4,
+        "allowed_roles": ["analyst", "admin"]
+      },
+      "db_query": {
+        "enabled": true,
+        "timeout_ms": 30000,
+        "max_concurrent": 2,
+        "allowed_roles": ["admin"]
+      },
+      "http_get": {
+        "enabled": true,
+        "timeout_ms": 15000,
+        "max_concurrent": 8,
+        "allowed_roles": ["analyst", "admin"]
+      },
+      "http_post": {
+        "enabled": true,
+        "timeout_ms": 15000,
+        "max_concurrent": 4,
+        "allowed_roles": ["admin"]
+      }
+    }
+  },
+
+  "roles": {
+    "admin": {
+      "permissions": ["*"],
+      "description": "Full access — all tools, all routes."
+    },
+    "analyst": {
+      "permissions": ["tools:invoke", "tools:list", "data:read"],
+      "description": "Can invoke allowed tools and read data."
+    },
+    "viewer": {
+      "permissions": ["data:read"],
+      "description": "Read-only access to application data."
+    }
+  }
+}

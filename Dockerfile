@@ -1,82 +1,48 @@
-# ============================================
-# Multi-stage Dockerfile for greenhat-tools-admin
-# ============================================
+# ============================================================
+# Stage 1 — build (uses Rust slim image)
+# ============================================================
+FROM rust:1.85-slim-bookworm AS builder
 
-# --------------------------------------------
-# Stage 1: Dependencies
-# --------------------------------------------
-FROM node:20-alpine AS deps
-RUN apk add --no-cache libc6-compat
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-<<<<<<< HEAD
-=======
-RUN npm ci --legacy-peer-deps
->>>>>>> fix-auth-deploy
-
-# Install dependencies with legacy peer deps for better-auth compatibility
-RUN npm ci --legacy-peer-deps
-
-# --------------------------------------------
-# Stage 2: Builder
-# --------------------------------------------
-FROM node:20-alpine AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
+# --- dependency cache layer ---
+# We write a minimal workspace Cargo.toml that only references the gateway
+# crate.  The repo-level Cargo.toml also contains mcp-spike + vendored deps
+# that aren't needed (and aren't copied) inside the image.
+RUN printf '[workspace]\nmembers = ["gateway"]\nresolver = "2"\n' > Cargo.toml
 
-# Copy source code
-COPY . .
+COPY gateway/Cargo.toml gateway/Cargo.toml
 
-# Build arguments for environment variables
-# These are passed at build time but not embedded in the image
-ARG NEXT_PUBLIC_SUPABASE_URL
-ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+# Create a dummy main so `cargo build` resolves deps
+RUN mkdir -p gateway/src && echo 'fn main(){}' > gateway/src/main.rs
+RUN cargo build --release --package gateway \
+    && rm -rf gateway/src
 
-# Set build-time env vars
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+# --- real source ---
+COPY gateway/src gateway/src
+# Touch so cargo sees the timestamp change
+RUN touch gateway/src/main.rs \
+    && cargo build --release --package gateway
 
-# Build the application
-RUN npm run build
+# ============================================================
+# Stage 2 — minimal runtime image
+# ============================================================
+FROM debian:bookworm-slim AS runtime
 
-# --------------------------------------------
-# Stage 3: Runner (Production)
-# --------------------------------------------
-FROM node:20-alpine AS runner
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app
+USER app
 
-# Create non-root user for security
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+COPY --from=builder /app/target/release/gateway /usr/local/bin/gateway
 
-# Copy built application
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-# Copy public folder (create if doesn't exist in builder)
-RUN mkdir -p /app/public
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+ENV PORT=8080
+EXPOSE 8080
 
-# Switch to non-root user
-USER nextjs
-
-# Expose port
-EXPOSE 3000
-
-# Set environment variables
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-ENV NODE_ENV=production
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
-
-# Start the application
-CMD ["node", "server.js"]
+ENTRYPOINT ["gateway"]
