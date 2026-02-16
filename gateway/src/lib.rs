@@ -8,14 +8,16 @@ pub mod rbac;
 pub mod tool_router;
 
 use axum::{
-    body::Body,
-    extract::Request,
+    body::{to_bytes, Body},
+    extract::{Path, Query, Request},
     http::{HeaderName, HeaderValue, Method, StatusCode},
     middleware as axum_mw,
     response::{IntoResponse, Json, Response},
     Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use tower_http::{
     cors::CorsLayer,
     request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
@@ -136,6 +138,86 @@ async fn proxy_my_tasks(
                     "code": 502,
                     "kind": "upstream_unavailable",
                     "message": format!("failed to reach tools API: {err}"),
+                }
+            });
+            (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
+        }
+    }
+}
+
+async fn proxy_exponential(
+    State(state): State<ApiProxyState>,
+    Path(path): Path<String>,
+    headers: axum::http::HeaderMap,
+    request: Request,
+) -> Response {
+    let query = request.uri().query().unwrap_or("");
+    let base = format!("{}/api/exponential/{}", state.upstream_base, path);
+    let url = if query.is_empty() {
+        base
+    } else {
+        format!("{base}?{query}")
+    };
+
+    let method = request.method().clone();
+    let body = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let payload = serde_json::json!({
+                "error": {
+                    "code": 400,
+                    "kind": "invalid_request_body",
+                    "message": format!("failed to read request body: {err}"),
+                }
+            });
+            return (StatusCode::BAD_REQUEST, Json(payload)).into_response();
+        }
+    };
+
+    let mut upstream_req = state.client.request(method, url).body(body);
+
+    for h in [
+        header::COOKIE,
+        header::AUTHORIZATION,
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+        header::HeaderName::from_static("x-csrf-token"),
+    ] {
+        if let Some(val) = headers.get(&h) {
+            upstream_req = upstream_req.header(&h, val);
+        }
+    }
+
+    match upstream_req.send().await {
+        Ok(upstream) => {
+            let status = upstream.status();
+            let upstream_headers = upstream.headers().clone();
+            let body = upstream.bytes().await.unwrap_or_default();
+
+            let mut resp = Response::new(Body::from(body));
+            *resp.status_mut() =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+
+            for h in [
+                header::CONTENT_TYPE,
+                header::CACHE_CONTROL,
+                header::ETAG,
+                header::LOCATION,
+                header::HeaderName::from_static("set-cookie"),
+            ] {
+                for value in upstream_headers.get_all(&h).iter() {
+                    resp.headers_mut().append(&h, value.clone());
+                }
+            }
+
+            resp
+        }
+        Err(err) => {
+            let payload = serde_json::json!({
+                "error": {
+                    "code": 502,
+                    "kind": "upstream_unavailable",
+                    "message": format!("failed to reach tools Exponential API: {err}"),
                 }
             });
             (StatusCode::BAD_GATEWAY, Json(payload)).into_response()
@@ -313,7 +395,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route("/version", axum::routing::get(version))
         .route(
             "/api/my-tasks",
-            axum::routing::get(proxy_my_tasks).with_state(proxy_state),
+            axum::routing::get(proxy_my_tasks).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/exponential/*path",
+            axum::routing::any(proxy_exponential).with_state(proxy_state),
         )
         .route(
             "/v1/tools",
@@ -395,10 +481,17 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             Method::GET,
             Method::POST,
             Method::PUT,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::COOKIE])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::COOKIE,
+            header::ACCEPT,
+            header::HeaderName::from_static("x-csrf-token"),
+        ])
         .allow_credentials(true);
 
     router
