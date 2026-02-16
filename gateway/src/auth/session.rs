@@ -197,6 +197,7 @@ impl SessionValidator for BetterAuthClient {
 
         let mut req = self.http.get(&url);
         let cache_key: String;
+        let mut stale_fallback: Option<Principal> = None;
 
         match credential {
             SessionCredential::Cookie(raw_cookie_header) => {
@@ -239,6 +240,9 @@ impl SessionValidator for BetterAuthClient {
                         if ts.elapsed() < Duration::from_secs(20) {
                             return Ok(principal.clone());
                         }
+                        if ts.elapsed() < Duration::from_secs(600) {
+                            stale_fallback = Some(principal.clone());
+                        }
                     }
                 }
 
@@ -251,22 +255,42 @@ impl SessionValidator for BetterAuthClient {
                         if ts.elapsed() < Duration::from_secs(20) {
                             return Ok(principal.clone());
                         }
+                        if ts.elapsed() < Duration::from_secs(600) {
+                            stale_fallback = Some(principal.clone());
+                        }
                     }
                 }
                 req = req.header("authorization", format!("Bearer {token}"));
             }
         }
 
-        let resp = req.send().await.map_err(|e| {
-            // NOTE: do NOT log the credential/token value — secrets stay out of logs.
-            tracing::error!(
-                error = %e,
-                "BetterAuth upstream request failed"
-            );
-            AuthError::Upstream(e.to_string())
-        })?;
+        let resp = match req.send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // NOTE: do NOT log the credential/token value — secrets stay out of logs.
+                tracing::error!(
+                    error = %e,
+                    "BetterAuth upstream request failed"
+                );
+                if let Some(principal) = stale_fallback {
+                    tracing::warn!("BetterAuth upstream unreachable; using stale session fallback");
+                    return Ok(principal);
+                }
+                return Err(AuthError::Upstream(e.to_string()));
+            }
+        };
 
         if !resp.status().is_success() {
+            if resp.status().is_server_error() {
+                if let Some(principal) = stale_fallback {
+                    tracing::warn!(status = %resp.status(), "BetterAuth 5xx; using stale session fallback");
+                    return Ok(principal);
+                }
+                return Err(AuthError::Upstream(format!(
+                    "BetterAuth returned status {}",
+                    resp.status()
+                )));
+            }
             return Err(AuthError::InvalidSession(format!(
                 "BetterAuth returned status {}",
                 resp.status()
