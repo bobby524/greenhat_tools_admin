@@ -207,11 +207,13 @@ fn extract_credential(headers: &HeaderMap, cookie_name: &str) -> Option<SessionC
     }
 
     // Cookie-based (browser) session.
+    // IMPORTANT: preserve the full cookie header; Better Auth may rely on
+    // companion cookies in addition to the session token cookie itself.
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
     // 1) Honor configured cookie name first.
-    if let Some(token) = parse_cookie(cookie_header, cookie_name) {
-        return Some(SessionCredential::Cookie(token));
+    if has_cookie(cookie_header, cookie_name) {
+        return Some(SessionCredential::Cookie(cookie_header.to_owned()));
     }
 
     // 2) Compatibility fallbacks for historical BetterAuth cookie names.
@@ -220,25 +222,21 @@ fn extract_credential(headers: &HeaderMap, cookie_name: &str) -> Option<SessionC
         "greenhat_tools.session_token",
         "better-auth.session_token",
     ] {
-        if alias != cookie_name {
-            if let Some(token) = parse_cookie(cookie_header, alias) {
-                return Some(SessionCredential::Cookie(token));
-            }
+        if alias != cookie_name && has_cookie(cookie_header, alias) {
+            return Some(SessionCredential::Cookie(cookie_header.to_owned()));
         }
     }
 
     None
 }
 
-fn parse_cookie(cookie_header: &str, name: &str) -> Option<String> {
-    cookie_header.split(';').find_map(|pair| {
+fn has_cookie(cookie_header: &str, name: &str) -> bool {
+    cookie_header.split(';').any(|pair| {
         let p = pair.trim();
-        let (k, v) = p.split_once('=')?;
-        if k.trim() == name {
-            Some(v.trim().to_owned())
-        } else {
-            None
-        }
+        let Some((k, _)) = p.split_once('=') else {
+            return false;
+        };
+        k.trim() == name
     })
 }
 
@@ -247,12 +245,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cookie_parser_extracts_value() {
+    fn has_cookie_detects_cookie_name() {
         let h = "a=1; better-auth.session_token=abc123; b=2";
-        assert_eq!(
-            parse_cookie(h, "better-auth.session_token"),
-            Some("abc123".into())
-        );
+        assert!(has_cookie(h, "better-auth.session_token"));
+        assert!(!has_cookie(h, "missing"));
     }
 
     #[test]
@@ -267,7 +263,9 @@ mod tests {
 
         let cred = extract_credential(&headers, "better-auth.session_token");
         match cred {
-            Some(SessionCredential::Cookie(t)) => assert_eq!(t, "tok123"),
+            Some(SessionCredential::Cookie(h)) => {
+                assert!(h.contains("__Secure-greenhat_tools.session_token=tok123"))
+            }
             _ => panic!("expected cookie credential"),
         }
     }

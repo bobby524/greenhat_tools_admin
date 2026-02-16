@@ -194,21 +194,10 @@ impl SessionValidator for BetterAuthClient {
         let mut req = self.http.get(&url);
 
         match credential {
-            SessionCredential::Cookie(token) => {
-                // Forward the session cookie so BetterAuth can read it.
-                // Include compatibility aliases so auth keeps working across
-                // cookie-prefix migrations (__Secure-/legacy names).
-                let mut pairs = vec![format!("{}={token}", self.cookie_name)];
-                for alias in [
-                    "__Secure-greenhat_tools.session_token",
-                    "greenhat_tools.session_token",
-                    "better-auth.session_token",
-                ] {
-                    if alias != self.cookie_name {
-                        pairs.push(format!("{alias}={token}"));
-                    }
-                }
-                req = req.header("cookie", pairs.join("; "));
+            SessionCredential::Cookie(raw_cookie_header) => {
+                // Forward original cookie header unchanged; Better Auth may
+                // require companion cookies beyond the session token cookie.
+                req = req.header("cookie", raw_cookie_header);
             }
             SessionCredential::Bearer(token) => {
                 req = req.header("authorization", format!("Bearer {token}"));
