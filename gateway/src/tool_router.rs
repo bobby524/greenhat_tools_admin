@@ -999,6 +999,11 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenbooks_statements",
             "get_greenbooks_crm_link",
             "sync_greenbooks_crm_link",
+            "get_greenbooks_report_aging",
+            "get_greenbooks_report_ap_aging",
+            "get_greenbooks_report_fx_summary",
+            "get_greenbooks_report_gst_summary",
+            "export_greenbooks_reports",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -1109,6 +1114,11 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_greenbooks_statements",
             "get_greenbooks_crm_link",
             "sync_greenbooks_crm_link",
+            "get_greenbooks_report_aging",
+            "get_greenbooks_report_ap_aging",
+            "get_greenbooks_report_fx_summary",
+            "get_greenbooks_report_gst_summary",
+            "export_greenbooks_reports",
             // Gateway-native
             "get_audit_logs",
         ];
@@ -1821,6 +1831,11 @@ fn validate_args(
         "list_greenbooks_statements" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/statements")?, body: None, content_type_json: false, require_bearer: true }) }
         "get_greenbooks_crm_link" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/crm-link")?, body: None, content_type_json: false, require_bearer: true }) }
         "sync_greenbooks_crm_link" => { let payload=params.get("payload").cloned().unwrap_or_else(|| params.clone()); let body_bytes=json_body(payload); if body_bytes.len() > egress_cfg.max_request_body_bytes { return Err(format!("request body {} bytes exceeds max {}", body_bytes.len(), egress_cfg.max_request_body_bytes)); } Ok(ValidatedArgs::HttpRequest { method: Method::POST, url: make_url("/api/greenbooks/crm-link")?, body: Some(body_bytes), content_type_json: true, require_bearer: true }) }
+        "get_greenbooks_report_aging" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports/aging")?, body: None, content_type_json: false, require_bearer: true }) }
+        "get_greenbooks_report_ap_aging" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports/ap-aging")?, body: None, content_type_json: false, require_bearer: true }) }
+        "get_greenbooks_report_fx_summary" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports/fx-summary")?, body: None, content_type_json: false, require_bearer: true }) }
+        "get_greenbooks_report_gst_summary" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports/gst-summary")?, body: None, content_type_json: false, require_bearer: true }) }
+        "export_greenbooks_reports" => { Ok(ValidatedArgs::HttpRequest { method: Method::GET, url: make_url("/api/greenbooks/reports/export")?, body: None, content_type_json: false, require_bearer: true }) }
 
         #[cfg(test)]
         "sleep" => {
