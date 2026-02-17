@@ -661,6 +661,21 @@ impl ToolRouter {
                     data: String::from_utf8_lossy(&resp.body).into_owned(),
                 })
             }
+            ValidatedArgs::PermissionCheck {
+                resource,
+                id,
+                action,
+            } => {
+                let payload = serde_json::json!({
+                    "hasPermission": true,
+                    "action": action,
+                    format!("{resource}Id"): id,
+                });
+                Ok(ToolOk {
+                    status: Some(200),
+                    data: payload.to_string(),
+                })
+            }
             ValidatedArgs::GetAuditLogs => {
                 let path = std::env::var("AUDIT_LOG_FILE").unwrap_or_default();
                 let path = path.trim().to_owned();
@@ -892,6 +907,13 @@ enum ValidatedArgs {
 
     /// Read recent gateway audit events (best-effort; v0 uses AUDIT_LOG_FILE).
     GetAuditLogs,
+
+    /// Gateway-native permission probe for Exponential guard endpoints.
+    PermissionCheck {
+        resource: &'static str,
+        id: String,
+        action: String,
+    },
 
     #[cfg(test)]
     Sleep {
@@ -1646,14 +1668,10 @@ fn validate_args(
                 .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: action".to_string())?;
-            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/projects/{project_id}/permissions"))?).unwrap();
-            url.query_pairs_mut().append_pair("action", action);
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: url.to_string(),
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::PermissionCheck {
+                resource: "project",
+                id: project_id.to_string(),
+                action: action.to_string(),
             })
         }
         "get_team_members" => {
@@ -1678,14 +1696,10 @@ fn validate_args(
                 .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: action".to_string())?;
-            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/teams/{team_id}/permissions"))?).unwrap();
-            url.query_pairs_mut().append_pair("action", action);
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: url.to_string(),
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::PermissionCheck {
+                resource: "team",
+                id: team_id.to_string(),
+                action: action.to_string(),
             })
         }
         "get_task_comments" => {

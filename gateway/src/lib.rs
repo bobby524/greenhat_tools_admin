@@ -2120,14 +2120,14 @@ mod tests {
             ("/api/exponential/projects/project_1/members", "members", true),
             (
                 "/api/exponential/projects/project_1/permissions?action=view",
-                "permissions",
-                true,
+                "hasPermission",
+                false,
             ),
             ("/api/exponential/teams/team_1/members", "members", true),
             (
                 "/api/exponential/teams/team_1/permissions?action=view",
-                "permissions",
-                true,
+                "hasPermission",
+                false,
             ),
             ("/api/exponential/sprints?projectId=project_1", "sprints", true),
             ("/api/exponential/sprints/sprint_1", "sprint", false),
@@ -2170,6 +2170,8 @@ mod tests {
             let body = body_json(resp).await;
             if is_array {
                 assert!(body.get(key).and_then(|v| v.as_array()).is_some());
+            } else if key == "hasPermission" {
+                assert!(body.get(key).and_then(|v| v.as_bool()).is_some());
             } else {
                 assert!(body.get(key).and_then(|v| v.as_object()).is_some());
             }
