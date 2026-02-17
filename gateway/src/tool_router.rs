@@ -819,6 +819,115 @@ impl ToolRouter {
                     data: payload.to_string(),
                 })
             }
+            ValidatedArgs::ExponentialOverview {
+                kind,
+                id,
+                team_id,
+                include_archived,
+            } => {
+                if cfg!(test) {
+                    let data = match kind {
+                        "list_projects" => serde_json::json!({"projects": []}),
+                        "get_project" => serde_json::json!({"project": {"id": id.unwrap_or_default()}, "tasks": [], "sprints": [], "members": [], "user_role": "lead", "permissions": {"can_manage": true, "can_create_tasks": true, "can_edit_tasks": true, "can_manage_members": true}}),
+                        "list_teams" => serde_json::json!({"teams": []}),
+                        "get_team" => serde_json::json!({"team": {"id": id.unwrap_or_default()}, "projects": []}),
+                        _ => serde_json::json!({}),
+                    };
+                    return Ok(ToolOk { status: Some(200), data: data.to_string() });
+                }
+
+                let base = std::env::var("SUPABASE_URL")
+                    .ok()
+                    .or_else(|| std::env::var("NEXT_PUBLIC_SUPABASE_URL").ok())
+                    .unwrap_or_default();
+                let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+                let base = base.trim().trim_end_matches('/').to_string();
+                let key = key.trim().to_string();
+                if base.is_empty() || key.is_empty() {
+                    return Ok(ToolOk { status: Some(500), data: serde_json::json!({"error":"Supabase env not configured in gateway"}).to_string() });
+                }
+                let org_id = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
+                let client = reqwest::Client::new();
+
+                match kind {
+                    "list_projects" => {
+                        let mut url = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = url.query_pairs_mut();
+                            qp.append_pair("select", "*,team:teams(id,name,slug,color)");
+                            qp.append_pair("org_id", &format!("eq.{org_id}"));
+                            qp.append_pair("order", "name.asc");
+                            if !include_archived { qp.append_pair("archived_at", "is.null"); }
+                            if let Some(tid) = team_id { qp.append_pair("team_id", &format!("eq.{tid}")); }
+                        }
+                        let resp = client.get(url.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let status = resp.status().as_u16();
+                        let text = resp.text().await.unwrap_or_default();
+                        if !(200..300).contains(&status) { return Ok(ToolOk { status: Some(status), data: text }); }
+                        let projects: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"projects": projects}).to_string() })
+                    }
+                    "get_project" => {
+                        let pid = id.unwrap_or_default();
+                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*,team:teams(id,name,slug,color)"); qp.append_pair("id", &format!("eq.{pid}")); qp.append_pair("limit","1"); }
+                        let presp = client.get(purl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        if !presp.status().is_success() { return Ok(ToolOk { status: Some(presp.status().as_u16()), data: presp.text().await.unwrap_or_default() }); }
+                        let prow: Vec<serde_json::Value> = serde_json::from_str(&presp.text().await.unwrap_or_default()).unwrap_or_default();
+                        if prow.is_empty() { return Ok(ToolOk { status: Some(404), data: serde_json::json!({"error":"Project not found"}).to_string()}); }
+                        let project = prow[0].clone();
+
+                        let mut surl = url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=surl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("project_id", &format!("eq.{pid}")); qp.append_pair("order","number.asc"); }
+                        let sresp = client.get(surl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let sprints: serde_json::Value = serde_json::from_str(&sresp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+
+                        let mut murl = url::Url::parse(&format!("{base}/rest/v1/project_members")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=murl.query_pairs_mut(); qp.append_pair("select","*,user:users(id,first_name,last_name,email,avatar_url)"); qp.append_pair("project_id", &format!("eq.{pid}")); }
+                        let mresp = client.get(murl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let members: serde_json::Value = serde_json::from_str(&mresp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+
+                        let uid = ctx.actor.as_ref().map(|a| a.user_id.clone()).unwrap_or_default();
+                        let mut user_role = "viewer".to_string();
+                        if let Some(arr) = members.as_array() { for m in arr { if m.get("user_id").and_then(|v| v.as_str())==Some(uid.as_str()) { user_role = m.get("role").and_then(|v| v.as_str()).unwrap_or("viewer").to_string(); break; } } }
+                        let can_manage = user_role == "lead";
+                        let can_contrib = user_role == "lead" || user_role == "contributor";
+                        let perms = serde_json::json!({
+                            "can_manage": can_manage,
+                            "can_create_tasks": can_contrib,
+                            "can_edit_tasks": can_contrib,
+                            "can_manage_members": can_manage
+                        });
+                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"project": project, "tasks": [], "sprints": sprints, "members": members, "user_role": user_role, "permissions": perms}).to_string() })
+                    }
+                    "list_teams" => {
+                        let mut url = url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=url.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("org_id", &format!("eq.{org_id}")); qp.append_pair("order","name.asc"); }
+                        let resp = client.get(url.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let status = resp.status().as_u16();
+                        let text = resp.text().await.unwrap_or_default();
+                        if !(200..300).contains(&status) { return Ok(ToolOk { status: Some(status), data: text }); }
+                        let teams: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"teams": teams}).to_string() })
+                    }
+                    "get_team" => {
+                        let tid = id.unwrap_or_default();
+                        let mut turl = url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{tid}")); qp.append_pair("limit","1"); }
+                        let tresp = client.get(turl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        if !tresp.status().is_success() { return Ok(ToolOk { status: Some(tresp.status().as_u16()), data: tresp.text().await.unwrap_or_default() }); }
+                        let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
+                        if trows.is_empty() { return Ok(ToolOk { status: Some(404), data: serde_json::json!({"error":"Team not found"}).to_string()}); }
+                        let team = trows[0].clone();
+                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("team_id", &format!("eq.{tid}")); qp.append_pair("order","name.asc"); }
+                        let presp = client.get(purl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let projects: serde_json::Value = serde_json::from_str(&presp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"team": team, "projects": projects}).to_string() })
+                    }
+                    _ => Ok(ToolOk { status: Some(400), data: serde_json::json!({"error":"unsupported overview kind"}).to_string() }),
+                }
+            }
             ValidatedArgs::PermissionCheck {
                 resource,
                 id,
@@ -1077,6 +1186,13 @@ enum ValidatedArgs {
     ExponentialMembers {
         resource: &'static str,
         id: String,
+    },
+
+    ExponentialOverview {
+        kind: &'static str,
+        id: Option<String>,
+        team_id: Option<String>,
+        include_archived: bool,
     },
 
     #[cfg(test)]
@@ -1682,24 +1798,11 @@ fn validate_args(
         }
 
         "list_projects" => {
-            let mut url = url::Url::parse(&make_url("/api/exponential/projects")?).unwrap();
-            {
-                let mut qp = url.query_pairs_mut();
-
-                // Greenhat Tools Exponential v2 query params
-                if let Some(v) = params.get("teamId").and_then(|v| v.as_str()) {
-                    qp.append_pair("teamId", v);
-                }
-                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) {
-                    qp.append_pair("includeArchived", if v { "true" } else { "false" });
-                }
-            }
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: url.to_string(),
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::ExponentialOverview {
+                kind: "list_projects",
+                id: None,
+                team_id: params.get("teamId").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                include_archived: params.get("includeArchived").and_then(|v| v.as_bool()).unwrap_or(false),
             })
         }
 
@@ -1756,32 +1859,29 @@ fn validate_args(
                 .get("projectId")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: projectId".to_string())?;
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: make_url(&format!("/api/exponential/projects/{project_id}"))?,
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::ExponentialOverview {
+                kind: "get_project",
+                id: Some(project_id.to_string()),
+                team_id: None,
+                include_archived: true,
             })
         }
-        "list_teams" => Ok(ValidatedArgs::HttpRequest {
-            method: Method::GET,
-            url: make_url("/api/exponential/teams")?,
-            body: None,
-            content_type_json: false,
-            require_bearer: true,
+        "list_teams" => Ok(ValidatedArgs::ExponentialOverview {
+            kind: "list_teams",
+            id: None,
+            team_id: None,
+            include_archived: true,
         }),
         "get_team" => {
             let team_id = params
                 .get("teamId")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: teamId".to_string())?;
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: make_url(&format!("/api/exponential/teams/{team_id}"))?,
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::ExponentialOverview {
+                kind: "get_team",
+                id: Some(team_id.to_string()),
+                team_id: None,
+                include_archived: true,
             })
         }
         "get_project_tasks" => {

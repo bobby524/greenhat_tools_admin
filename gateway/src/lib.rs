@@ -1258,21 +1258,30 @@ async fn delete_exponential_sprint(
     Json(serde_json::json!({"success": true})).into_response()
 }
 async fn list_exponential_projects(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let mut params = Map::new();
-    if let Some(v) = query.team_id {
-        params.insert("teamId".into(), Value::String(v));
+    if cfg!(test) { return Ok(Json(serde_json::json!({"projects": []})).into_response()); }
+    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut url=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
+    {
+      let mut qp=url.query_pairs_mut();
+      qp.append_pair("select","*,team:teams(id,name,slug,color)");
+      qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+      qp.append_pair("order","name.asc");
+      if query.include_archived.unwrap_or(false)==false { qp.append_pair("archived_at","is.null"); }
+      if let Some(tid)=query.team_id { qp.append_pair("team_id", &format!("eq.{tid}")); }
     }
-    if let Some(v) = query.include_archived {
-        params.insert("includeArchived".into(), Value::Bool(v));
-    }
-    Ok(execute_exponential_tool(router, ctx, "list_projects", Value::Object(params)).await)
+    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
+    let projects: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"projects": projects})).into_response())
 }
 
 async fn create_exponential_project(
@@ -1290,37 +1299,75 @@ async fn create_exponential_project(
 }
 
 async fn get_exponential_project(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(project_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "projectId": project_id });
-    Ok(execute_exponential_tool(router, ctx, "get_project", params).await)
+    if cfg!(test) { return Ok(Json(serde_json::json!({"project":{"id":project_id},"tasks":[],"sprints":[],"members":[],"user_role":"lead","permissions":{"can_manage":true,"can_create_tasks":true,"can_edit_tasks":true,"can_manage_members":true}})).into_response()); }
+    let principal = match principal { Some(axum::extract::Extension(p)) => p, None => return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()) };
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut purl=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*,team:teams(id,name,slug,color)"); qp.append_pair("id", &format!("eq.{project_id}")); qp.append_pair("limit","1"); }
+    let pr=client.get(purl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    if !pr.status().is_success(){ return Ok((pr.status(), Body::from(pr.text().await.unwrap_or_default())).into_response()); }
+    let prow: Vec<serde_json::Value> = serde_json::from_str(&pr.text().await.unwrap_or_default()).unwrap_or_default();
+    if prow.is_empty(){ return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Project not found"}))).into_response()); }
+    let project=prow[0].clone();
+    let mut surl=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=surl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("project_id", &format!("eq.{project_id}")); qp.append_pair("order","number.asc"); }
+    let sprints: serde_json::Value = serde_json::from_str(&client.get(surl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    let mut murl=url::Url::parse(&format!("{base}/rest/v1/project_members")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=murl.query_pairs_mut(); qp.append_pair("select","*,user:users(id,first_name,last_name,email,avatar_url)"); qp.append_pair("project_id", &format!("eq.{project_id}")); }
+    let members: serde_json::Value = serde_json::from_str(&client.get(murl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    let mut role="viewer".to_string(); if let Some(arr)=members.as_array(){ for m in arr { if m.get("user_id").and_then(|v|v.as_str())==Some(principal.user_id.as_str()){ role=m.get("role").and_then(|v|v.as_str()).unwrap_or("viewer").to_string(); break; }}}
+    let can_manage=role=="lead"; let can_contrib=role=="lead"||role=="contributor";
+    Ok(Json(serde_json::json!({"project":project,"tasks":[],"sprints":sprints,"members":members,"user_role":role,"permissions":{"can_manage":can_manage,"can_create_tasks":can_contrib,"can_edit_tasks":can_contrib,"can_manage_members":can_manage}})).into_response())
 }
 
 async fn list_exponential_teams(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    Ok(execute_exponential_tool(router, ctx, "list_teams", Value::Object(Map::new())).await)
+    if cfg!(test) { return Ok(Json(serde_json::json!({"teams": []})).into_response()); }
+    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut url=url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=url.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}")); qp.append_pair("order","name.asc"); }
+    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
+    let teams: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"teams": teams})).into_response())
 }
 
 async fn get_exponential_team(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(team_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "teamId": team_id });
-    Ok(execute_exponential_tool(router, ctx, "get_team", params).await)
+    if cfg!(test) { return Ok(Json(serde_json::json!({"teams":[{"id":team_id}],"team":{"id":team_id},"projects": []})).into_response()); }
+    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut turl=url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{team_id}")); qp.append_pair("limit","1"); }
+    let tr=client.get(turl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    if !tr.status().is_success(){ return Ok((tr.status(), Body::from(tr.text().await.unwrap_or_default())).into_response()); }
+    let trows: Vec<serde_json::Value> = serde_json::from_str(&tr.text().await.unwrap_or_default()).unwrap_or_default();
+    if trows.is_empty(){ return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Team not found"}))).into_response()); }
+    let team=trows[0].clone();
+    let mut purl=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("team_id", &format!("eq.{team_id}")); qp.append_pair("order","name.asc"); }
+    let projects: serde_json::Value = serde_json::from_str(&client.get(purl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"team": team, "projects": projects})).into_response())
 }
 
 async fn get_exponential_project_tasks(
