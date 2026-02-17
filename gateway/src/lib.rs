@@ -230,70 +230,248 @@ async fn proxy_users(
     .await
 }
 
-async fn proxy_exponential_labels(
-    State(state): State<EgressProxyState>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
-    request: Request,
-) -> Response {
-    egress_proxy_api_path(
-        state,
-        "/api/exponential/labels".to_string(),
-        headers,
-        request_id,
-        request,
-    )
-    .await
+const EXPONENTIAL_ORG_ID: &str = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
+
+fn supabase_env() -> Result<(String, String), Response> {
+    let base = std::env::var("SUPABASE_URL")
+        .ok()
+        .or_else(|| std::env::var("NEXT_PUBLIC_SUPABASE_URL").ok())
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if base.is_empty() || key.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Supabase env not configured in gateway" })),
+        )
+            .into_response());
+    }
+    Ok((base, key))
 }
 
-async fn proxy_exponential_views(
-    State(state): State<EgressProxyState>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
-    request: Request,
-) -> Response {
-    egress_proxy_api_path(
-        state,
-        "/api/exponential/views".to_string(),
-        headers,
-        request_id,
-        request,
-    )
-    .await
+fn supabase_client_with_key(key: &str) -> reqwest::Client {
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(key) {
+        default_headers.insert("apikey", v.clone());
+        default_headers.insert(reqwest::header::AUTHORIZATION, reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).unwrap_or(v));
+    }
+    reqwest::Client::builder()
+        .default_headers(default_headers)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-async fn proxy_exponential_view_detail(
-    State(state): State<EgressProxyState>,
+async fn get_exponential_labels(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+) -> Response {
+    if principal.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        qp.append_pair("order", "name.asc");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return (status, Body::from(body)).into_response();
+            }
+            let labels: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            Json(serde_json::json!({"labels": labels})).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn create_exponential_label(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request: Request,
+) -> Response {
+    if principal.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid body: {e}")}))).into_response(),
+    };
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Invalid JSON"}))).into_response(),
+    };
+    let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let color = parsed.get("color").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if name.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label name is required"}))).into_response(); }
+    if color.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label color is required"}))).into_response(); }
+    let client = supabase_client_with_key(&key);
+    let url = format!("{base}/rest/v1/labels");
+    let payload = serde_json::json!([{"org_id": EXPONENTIAL_ORG_ID, "name": name, "color": color}]);
+    match client.post(url).header("Prefer", "return=representation").json(&payload).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() { return (status, Body::from(body)).into_response(); }
+            let rows: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            let label = rows.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
+            (StatusCode::CREATED, Json(serde_json::json!({"label": label}))).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn delete_exponential_label(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if principal.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+    }
+    let id = match q.get("id") { Some(v) if !v.is_empty() => v.clone(), _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label id is required"}))).into_response() };
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
+    url.query_pairs_mut().append_pair("id", &format!("eq.{id}"));
+    match client.delete(url.as_str()).send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+            Json(serde_json::json!({"success": true})).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn get_exponential_views(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+) -> Response {
+    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        qp.append_pair("user_id", &format!("eq.{user_id}"));
+        qp.append_pair("order", "updated_at.desc");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() { return (status, Body::from(body)).into_response(); }
+            let views: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            Json(serde_json::json!({"views": views})).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn create_exponential_view(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request: Request,
+) -> Response {
+    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await { Ok(b) => b, Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid body: {e}")}))).into_response() };
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) { Ok(v) => v, Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Invalid JSON"}))).into_response() };
+    let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if name.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"name is required"}))).into_response(); }
+    let payload = serde_json::json!([{
+        "org_id": EXPONENTIAL_ORG_ID,
+        "user_id": user_id,
+        "name": name,
+        "filters": parsed.get("filters").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "sort_field": parsed.get("sort_field").and_then(|v| v.as_str()).unwrap_or("updated_at"),
+        "sort_dir": parsed.get("sort_dir").and_then(|v| v.as_str()).unwrap_or("desc"),
+    }]);
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    url.query_pairs_mut().append_pair("on_conflict", "org_id,user_id,name");
+    match client
+        .post(url.as_str())
+        .header("Prefer", "resolution=merge-duplicates,return=representation")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() { return (status, Body::from(body)).into_response(); }
+            let rows: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            let view = rows.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
+            (StatusCode::CREATED, Json(serde_json::json!({"view": view}))).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn delete_exponential_view(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(view_id): Path<String>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
-    request: Request,
 ) -> Response {
-    egress_proxy_api_path(
-        state,
-        format!("/api/exponential/views/{view_id}"),
-        headers,
-        request_id,
-        request,
-    )
-    .await
+    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{view_id}"));
+        qp.append_pair("user_id", &format!("eq.{user_id}"));
+    }
+    match client.delete(url.as_str()).send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+            Json(serde_json::json!({"success": true})).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
 }
 
-async fn proxy_exponential_project_assignees(
-    State(state): State<EgressProxyState>,
+async fn get_exponential_project_assignees(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(project_id): Path<String>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
-    request: Request,
 ) -> Response {
-    egress_proxy_api_path(
-        state,
-        format!("/api/exponential/projects/{project_id}/assignees"),
-        headers,
-        request_id,
-        request,
-    )
-    .await
+    if principal.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/project_assignees_view")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "user_id,first_name,last_name,email,avatar_url,project_role,display_name");
+        qp.append_pair("project_id", &format!("eq.{project_id}"));
+        qp.append_pair("order", "display_name.asc");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() { return (status, Body::from(body)).into_response(); }
+            let rows: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap_or_default();
+            let mut seen = std::collections::HashSet::new();
+            let mut dedup = Vec::new();
+            for row in rows {
+                let uid = row.get("user_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if !uid.is_empty() && seen.insert(uid) { dedup.push(row); }
+            }
+            Json(serde_json::json!({"assignees": dedup, "count": dedup.len()})).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
 }
 
 async fn proxy_api_path(
@@ -1476,11 +1654,6 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         upstream_base: config.betterauth_base_url.trim_end_matches('/').to_string(),
     };
 
-    let exponential_egress_state = EgressProxyState {
-        client: EgressClient::new(EgressConfig::from_env()),
-        upstream_base: exponential_upstream_base(),
-    };
-
     let mut router = Router::new()
         .route("/health", axum::routing::get(health))
         .route("/version", axum::routing::get(version))
@@ -1564,23 +1737,22 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/labels",
-            axum::routing::any(proxy_exponential_labels)
-                .with_state(exponential_egress_state.clone()),
+            axum::routing::get(get_exponential_labels)
+                .post(create_exponential_label)
+                .delete(delete_exponential_label),
         )
         .route(
             "/api/exponential/views",
-            axum::routing::any(proxy_exponential_views)
-                .with_state(exponential_egress_state.clone()),
+            axum::routing::get(get_exponential_views)
+                .post(create_exponential_view),
         )
         .route(
             "/api/exponential/views/{view_id}",
-            axum::routing::any(proxy_exponential_view_detail)
-                .with_state(exponential_egress_state.clone()),
+            axum::routing::delete(delete_exponential_view),
         )
         .route(
             "/api/exponential/projects/{project_id}/assignees",
-            axum::routing::any(proxy_exponential_project_assignees)
-                .with_state(exponential_egress_state),
+            axum::routing::get(get_exponential_project_assignees),
         )
         .route(
             "/api/greenbooks/{*path}",
