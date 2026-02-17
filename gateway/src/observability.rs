@@ -35,6 +35,12 @@ struct BetterStackEnvelope {
     message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RequestActor {
+    pub user_id: String,
+    pub roles: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct RequestLog {
     service: String,
@@ -43,6 +49,10 @@ struct RequestLog {
     status: u16,
     x_request_id: String,
     latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    roles: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,6 +130,7 @@ pub async fn request_log_middleware(
         .get::<UpstreamTrace>()
         .cloned()
         .unwrap_or_default();
+    let actor = response.extensions().get::<RequestActor>().cloned();
 
     let error_kind = upstream.error_kind.or_else(|| classify_http_error(status));
 
@@ -130,6 +141,8 @@ pub async fn request_log_middleware(
         status,
         x_request_id: request_id,
         latency_ms,
+        user_id: actor.as_ref().map(|a| a.user_id.clone()),
+        roles: actor.as_ref().map(|a| a.roles.clone()),
         upstream_status: upstream.status,
         upstream_latency_ms: upstream.latency_ms,
         timeout_hit: upstream.timeout_hit,

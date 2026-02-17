@@ -7,6 +7,7 @@ use tower_http::request_id::RequestId;
 use crate::audit::{actor_from_principal, AuditEvent};
 use crate::auth::{AuthError, AuthState, Principal, SessionCredential};
 use crate::error::AppError;
+use crate::observability::RequestActor;
 
 // ---------------------------------------------------------------------------
 // Helpers: extract request context for audit events
@@ -150,8 +151,14 @@ pub async fn auth_middleware(
                 audit.emit(evt);
             }
 
+            let request_actor = RequestActor {
+                user_id: principal.user_id.clone(),
+                roles: principal.roles.clone(),
+            };
             req.extensions_mut().insert::<Principal>(principal);
-            Ok(next.run(req).await)
+            let mut response = next.run(req).await;
+            response.extensions_mut().insert(request_actor);
+            Ok(response)
         }
         Err(e) => {
             let reason = match &e {
