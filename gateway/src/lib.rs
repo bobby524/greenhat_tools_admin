@@ -1893,7 +1893,8 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
 
     let audit = audit_log.unwrap_or_else(AuditLog::from_env);
 
-    let rate_limiter = RateLimiter::new(config.rate_limit_rps, config.rate_limit_burst);
+    let read_rate_limiter = RateLimiter::new(config.rate_limit_read_rps, config.rate_limit_read_burst);
+    let write_rate_limiter = RateLimiter::new(config.rate_limit_write_rps, config.rate_limit_write_burst);
     let validation = ValidationConfig {
         max_body_size: config.max_body_size,
         audit: audit.clone(),
@@ -2162,7 +2163,8 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
     }
 
     let rate_state = crate::middleware::rate_limit::RateLimitState {
-        limiter: rate_limiter,
+        read_limiter: read_rate_limiter,
+        write_limiter: write_rate_limiter,
         audit: audit.clone(),
     };
 

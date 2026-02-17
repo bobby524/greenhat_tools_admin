@@ -7,10 +7,14 @@
 pub struct GatewayConfig {
     /// TCP port to listen on.
     pub port: u16,
-    /// Sustained requests-per-second allowed per IP (token refill rate).
-    pub rate_limit_rps: f64,
-    /// Burst capacity per IP (token bucket size).
-    pub rate_limit_burst: u32,
+    /// Sustained requests-per-second allowed for read routes (GET/HEAD).
+    pub rate_limit_read_rps: f64,
+    /// Burst capacity for read routes.
+    pub rate_limit_read_burst: u32,
+    /// Sustained requests-per-second allowed for write routes.
+    pub rate_limit_write_rps: f64,
+    /// Burst capacity for write routes.
+    pub rate_limit_write_burst: u32,
     /// Maximum allowed request body size in bytes.
     pub max_body_size: usize,
 
@@ -45,8 +49,12 @@ impl GatewayConfig {
     pub fn from_env() -> Self {
         Self {
             port: parse_env("PORT", 8080),
-            rate_limit_rps: parse_env("RATE_LIMIT_RPS", 10.0),
-            rate_limit_burst: parse_env("RATE_LIMIT_BURST", 20),
+            // Keep backward compatibility with RATE_LIMIT_RPS/BURST, but allow
+            // separate tuning for read vs write traffic.
+            rate_limit_read_rps: parse_env("RATE_LIMIT_READ_RPS", parse_env("RATE_LIMIT_RPS", 12.0)),
+            rate_limit_read_burst: parse_env("RATE_LIMIT_READ_BURST", parse_env("RATE_LIMIT_BURST", 40)),
+            rate_limit_write_rps: parse_env("RATE_LIMIT_WRITE_RPS", parse_env("RATE_LIMIT_RPS", 8.0)),
+            rate_limit_write_burst: parse_env("RATE_LIMIT_WRITE_BURST", parse_env("RATE_LIMIT_BURST", 20)),
             max_body_size: parse_env("MAX_BODY_SIZE_BYTES", 1_048_576), // 1 MiB
 
             csrf_enabled: parse_env("CSRF_ENABLED", true),

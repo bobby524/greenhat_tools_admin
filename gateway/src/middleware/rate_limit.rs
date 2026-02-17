@@ -74,7 +74,8 @@ impl RateLimiter {
 /// Rate-limit middleware state: limiter + audit log.
 #[derive(Clone)]
 pub struct RateLimitState {
-    pub limiter: RateLimiter,
+    pub read_limiter: RateLimiter,
+    pub write_limiter: RateLimiter,
     pub audit: AuditLog,
 }
 
@@ -91,9 +92,18 @@ pub async fn rate_limit_middleware(
     next: Next,
 ) -> Result<Response, AppError> {
     let ip = extract_client_ip(&request);
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let key = extract_principal_key(&request, &ip, &path);
 
-    if !state.limiter.check(&ip) {
-        tracing::warn!(client_ip = %ip, "rate limit exceeded");
+    let (limiter, layer) = if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+        (&state.read_limiter, "read")
+    } else {
+        (&state.write_limiter, "write")
+    };
+
+    if !limiter.check(&key) {
+        tracing::warn!(client_ip = %ip, rate_key = %key, path = %path, layer = %layer, "rate limit exceeded");
 
         let request_id = request
             .extensions()
@@ -102,17 +112,15 @@ pub async fn rate_limit_middleware(
             .unwrap_or("unknown")
             .to_owned();
 
-        let path = request.uri().path().to_owned();
-
         state.audit.emit(AuditEvent::new(
             "policy.rate_limit_hit",
             &request_id,
             &ip,
             None,
             serde_json::json!({
-                "layer": "ip",
-                "key": ip,
-                "limit_rps": state.limiter.rps(),
+                "layer": layer,
+                "key": key,
+                "limit_rps": limiter.rps(),
                 "path": path,
             }),
         ));
@@ -121,6 +129,59 @@ pub async fn rate_limit_middleware(
     }
 
     Ok(next.run(request).await)
+}
+
+// ---------------------------------------------------------------------------
+// Key extraction helpers
+// ---------------------------------------------------------------------------
+
+fn extract_principal_key(req: &Request, ip: &str, path: &str) -> String {
+    // Prefer stable session-cookie fingerprint to avoid penalizing NAT-shared IPs.
+    let session_fingerprint = req
+        .headers()
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(extract_session_cookie)
+        .map(hash_str)
+        .unwrap_or_else(|| format!("ip:{}", ip));
+
+    let route_bucket = route_bucket(path);
+    format!("{}:{}", session_fingerprint, route_bucket)
+}
+
+fn extract_session_cookie(cookie_header: &str) -> Option<&str> {
+    cookie_header
+        .split(';')
+        .map(|p| p.trim())
+        .find_map(|part| {
+            let (name, value) = part.split_once('=')?;
+            if name == "better-auth.session_token" || name == "__Secure-better-auth.session_token" {
+                Some(value)
+            } else {
+                None
+            }
+        })
+}
+
+fn hash_str(input: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut h = DefaultHasher::new();
+    input.hash(&mut h);
+    format!("u:{:x}", h.finish())
+}
+
+fn route_bucket(path: &str) -> &str {
+    if path.starts_with("/api/exponential/tasks") {
+        "/api/exponential/tasks"
+    } else if path.starts_with("/api/exponential/projects") {
+        "/api/exponential/projects"
+    } else if path.starts_with("/api/exponential/teams") {
+        "/api/exponential/teams"
+    } else {
+        "other"
+    }
 }
 
 // ---------------------------------------------------------------------------

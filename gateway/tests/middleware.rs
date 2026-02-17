@@ -14,8 +14,10 @@ use gateway::config::GatewayConfig;
 fn test_config(burst: u32) -> GatewayConfig {
     GatewayConfig {
         port: 0,
-        rate_limit_rps: 0.0, // no refill → deterministic exhaustion
-        rate_limit_burst: burst,
+        rate_limit_read_rps: 0.0, // no refill → deterministic exhaustion
+        rate_limit_read_burst: burst,
+        rate_limit_write_rps: 0.0,
+        rate_limit_write_burst: burst,
         max_body_size: 256,
         csrf_enabled: false,
         csrf_cookie_name: "csrf_token".to_owned(),

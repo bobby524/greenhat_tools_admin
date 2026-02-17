@@ -13,8 +13,10 @@ use gateway::config::GatewayConfig;
 fn csrf_config() -> GatewayConfig {
     GatewayConfig {
         port: 0,
-        rate_limit_rps: 100.0,
-        rate_limit_burst: 1000,
+        rate_limit_read_rps: 100.0,
+        rate_limit_read_burst: 1000,
+        rate_limit_write_rps: 100.0,
+        rate_limit_write_burst: 1000,
         max_body_size: 1_048_576,
         csrf_enabled: true,
         csrf_cookie_name: "csrf_token".to_owned(),
