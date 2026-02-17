@@ -157,6 +157,11 @@ Keep it short, factual, and link to commits/files.
 - Moved high-traffic task reads (list, detail, comments) onto explicit egress proxy handlers to reduce tool-router use during task navigation.
 - Files: `gateway/src/lib.rs`, `progress.md`.
 
+### Phase2-D deterministic membership + sprint reads ✅
+- Added egress proxy handlers for project/team members + permissions and sprint list/detail reads to keep navigation on the egress proxy path.
+- Tests expanded for auth + response shape on membership/permissions and sprint read endpoints.
+- Files: `gateway/src/lib.rs`, `progress.md`.
+
 ### AuthZ: RBAC + module entitlements middleware (deny-by-default) ✅
 - **Policy loading:** `POLICY_FILE` env var → JSON matching `docs/schemas/policy.v0.schema.json`.
   Loaded at startup; panics on missing/invalid file.  Schema version validated (must be `0.x.y`).
