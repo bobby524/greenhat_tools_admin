@@ -1227,7 +1227,64 @@ async fn list_exponential_projects(
     let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
     let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
     if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
-    let projects: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    let mut projects: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+
+    let parse_count = |resp: &reqwest::Response| -> i64 {
+        let raw = resp
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*/0");
+        raw.rsplit('/').next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(0)
+    };
+
+    for p in &mut projects {
+        let pid = match p.get("id").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        let mut all_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        {
+            let mut qp = all_url.query_pairs_mut();
+            qp.append_pair("select", "id");
+            qp.append_pair("project_id", &format!("eq.{pid}"));
+            qp.append_pair("archived_at", "is.null");
+        }
+        let all_resp = client
+            .get(all_url.as_str())
+            .header("Prefer", "count=exact")
+            .header("Range", "0-0")
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let task_count = parse_count(&all_resp);
+
+        let mut done_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        {
+            let mut qp = done_url.query_pairs_mut();
+            qp.append_pair("select", "id");
+            qp.append_pair("project_id", &format!("eq.{pid}"));
+            qp.append_pair("archived_at", "is.null");
+            qp.append_pair("status", "eq.done");
+        }
+        let done_resp = client
+            .get(done_url.as_str())
+            .header("Prefer", "count=exact")
+            .header("Range", "0-0")
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        let completed_count = parse_count(&done_resp);
+
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("task_count".to_string(), serde_json::json!(task_count));
+            obj.insert("completed_count".to_string(), serde_json::json!(completed_count));
+        }
+    }
+
     Ok(Json(serde_json::json!({"projects": projects})).into_response())
 }
 
