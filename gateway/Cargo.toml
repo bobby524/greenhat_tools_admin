@@ -33,6 +33,7 @@ serde_json = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 jsonwebtoken = "9"
+ammonia = "4"
 
 # OpenTelemetry (optional — enable with `cargo build --features otel`)
 opentelemetry      = { version = "0.31", default-features = false, features = ["trace"], optional = true }

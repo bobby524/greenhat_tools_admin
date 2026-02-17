@@ -6,6 +6,7 @@ pub mod error;
 pub mod middleware;
 pub mod observability;
 pub mod rbac;
+pub mod rich_text;
 pub mod tool_router;
 
 use axum::{
@@ -40,6 +41,7 @@ use crate::middleware::rbac::{rbac_middleware, RbacState};
 use crate::middleware::validate::{validate_request, ValidationConfig};
 use crate::observability::{request_log_middleware, Observability, UpstreamTrace, X_REQUEST_ID};
 use crate::rbac::{Policy, PolicyEngine};
+use crate::rich_text::sanitize_description_value;
 use crate::tool_router::{ToolAuditCtx, ToolRequest, ToolRouter};
 use axum::extract::State;
 use axum::http::header;
@@ -968,6 +970,7 @@ async fn create_exponential_task(
     if principal.is_none() {
         return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
     }
+    let body = body.as_object().cloned().unwrap_or_default();
     let project_id = body.get("project_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     if project_id.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"project_id is required"}))).into_response()); }
@@ -978,7 +981,7 @@ async fn create_exponential_task(
       "org_id": EXPONENTIAL_ORG_ID,
       "project_id": project_id,
       "title": title,
-      "description": body.get("description").cloned().unwrap_or(serde_json::Value::Null),
+      "description": sanitize_description_value(body.get("description").unwrap_or(&serde_json::Value::Null)),
       "status": body.get("status").cloned().unwrap_or(serde_json::json!("todo")),
       "priority": body.get("priority").cloned().unwrap_or(serde_json::json!(0)),
       "assignee_id": body.get("assignee_id").cloned().unwrap_or(serde_json::Value::Null),
@@ -1036,7 +1039,13 @@ async fn update_exponential_task(
     let client = supabase_client_with_key(&key);
     let mut updates = serde_json::Map::new();
     for f in ["title","description","status","priority","assignee_id","sprint_id","due_at","labels","milestone","position","project_id"] {
-        if let Some(v) = body.get(f) { updates.insert(f.to_string(), v.clone()); }
+        if let Some(v) = body.get(f) {
+            if f == "description" {
+                updates.insert(f.to_string(), sanitize_description_value(v));
+            } else {
+                updates.insert(f.to_string(), v.clone());
+            }
+        }
     }
     if let Some(action) = body.get("action").and_then(|v| v.as_str()) {
         if action == "archive" { updates.insert("archived_at".into(), serde_json::json!("now")); }
