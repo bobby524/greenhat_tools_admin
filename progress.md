@@ -118,6 +118,16 @@ Keep it short, factual, and link to commits/files.
 - Enforced per-tool timeouts + global/per-tool concurrency limits + bounded queue/backpressure.
 - Optional cancellation support for queued + in-flight tool calls.
 - Improved audit fields (`queue_wait_ms`, `timeout_ms`) and structured egress-blocked classification.
+
+---
+
+## 2026-02-16 — Milestone 2 (in progress)
+
+### Phase2-B deterministic project tasks read ✅
+- Rust-native GET handler for `/api/exponential/projects/{project_id}/tasks` using egress proxy (no tool-router lane).
+- Preserves query passthrough + request-id propagation; RBAC enforced by existing middleware.
+- Tests expanded for auth + response shape on project tasks.
+- Files: `gateway/src/lib.rs`
 - Docs: `docs/TOOL_EXECUTION.md` (plus updates in `docs/AUDIT_EVENTS.md`).
 - Commits: `22baa5d`, `10cf3d2`.
 

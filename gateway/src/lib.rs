@@ -263,6 +263,23 @@ async fn proxy_exponential_project_detail(
     .await
 }
 
+async fn proxy_exponential_project_tasks(
+    State(state): State<EgressProxyState>,
+    Path(project_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/projects/{project_id}/tasks"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
 async fn proxy_exponential_teams_list(
     State(state): State<EgressProxyState>,
     headers: axum::http::HeaderMap,
@@ -1409,6 +1426,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
                 .with_state(exponential_egress_state.clone()),
         )
         .route(
+            "/api/exponential/projects/{project_id}/tasks",
+            axum::routing::get(proxy_exponential_project_tasks)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
             "/api/exponential/teams",
             axum::routing::get(proxy_exponential_teams_list)
                 .with_state(exponential_egress_state.clone()),
@@ -1684,6 +1706,10 @@ mod tests {
                 get(proxy_exponential_project_detail).with_state(proxy_state.clone()),
             )
             .route(
+                "/api/exponential/projects/{project_id}/tasks",
+                get(proxy_exponential_project_tasks).with_state(proxy_state.clone()),
+            )
+            .route(
                 "/api/exponential/teams",
                 get(proxy_exponential_teams_list).with_state(proxy_state.clone()),
             )
@@ -1759,7 +1785,8 @@ mod tests {
 
         let response = serde_json::json!({
             "projects": [{ "id": "project_1" }],
-            "teams": [{ "id": "team_1" }]
+            "teams": [{ "id": "team_1" }],
+            "tasks": [{ "id": "task_1" }]
         })
         .to_string();
 
@@ -1774,7 +1801,7 @@ mod tests {
         let rbac_state = RbacState::new(engine, AuditLog::from_env());
 
         let unauth_router = build_proxy_router(proxy_state.clone(), rbac_state.clone(), None);
-        let resp = unauth_router
+        let resp = unauth_router.clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/projects")
@@ -1786,8 +1813,20 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
+        let resp = unauth_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/projects/project_1/tasks")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
         let authed_router = build_proxy_router(proxy_state, rbac_state, Some(test_principal()));
-        let resp = authed_router
+        let resp = authed_router.clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/teams/team_1")
@@ -1800,5 +1839,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_json(resp).await;
         assert!(body.get("teams").and_then(|v| v.as_array()).is_some());
+
+        let resp = authed_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/projects/project_1/tasks?limit=25&cursor=abc")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("tasks").and_then(|v| v.as_array()).is_some());
     }
 }
