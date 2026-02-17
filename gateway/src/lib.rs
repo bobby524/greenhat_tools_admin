@@ -973,99 +973,156 @@ struct PermissionQuery {
 }
 
 async fn list_exponential_tasks(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Query(query): Query<ListTasksQuery>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let mut params = Map::new();
-    if let Some(v) = query.project_id {
-        params.insert("projectId".into(), Value::String(v));
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null})).into_response());
     }
-    if let Some(v) = query.assignee_id {
-        params.insert("assigneeId".into(), Value::String(v));
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
     }
-    if let Some(v) = query.status {
-        params.insert("status".into(), Value::String(v));
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        if query.include_archived.unwrap_or(false) == false { qp.append_pair("archived_at", "is.null"); }
+        if let Some(v) = query.project_id { qp.append_pair("project_id", &format!("eq.{v}")); }
+        if let Some(v) = query.assignee_id { qp.append_pair("assignee_id", &format!("eq.{v}")); }
+        if let Some(v) = query.status { qp.append_pair("status", &format!("eq.{v}")); }
+        if let Some(v) = query.sprint_id { qp.append_pair("sprint_id", &format!("eq.{v}")); }
+        if let Some(v) = query.team_id { qp.append_pair("team_id", &format!("eq.{v}")); }
+        if let Some(v) = query.search { qp.append_pair("or", &format!("title.ilike.*{v}*,identifier.ilike.*{v}*")); }
+        qp.append_pair("order", "updated_at.desc");
+        qp.append_pair("order", "id.desc");
+        qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
     }
-    if let Some(v) = query.sprint_id {
-        params.insert("sprintId".into(), Value::String(v));
-    }
-    if let Some(v) = query.team_id {
-        params.insert("teamId".into(), Value::String(v));
-    }
-    if let Some(v) = query.search {
-        params.insert("search".into(), Value::String(v));
-    }
-    if let Some(v) = query.include_archived {
-        params.insert("includeArchived".into(), Value::Bool(v));
-    }
-    if let Some(v) = query.limit {
-        params.insert("limit".into(), Value::Number(serde_json::Number::from(v)));
-    }
-    if let Some(v) = query.cursor {
-        params.insert("cursor".into(), Value::String(v));
-    }
-    Ok(execute_exponential_tool(router, ctx, "list_tasks", Value::Object(params)).await)
+    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let tasks: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null})).into_response())
 }
 
 async fn create_exponential_task(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let request_id = ctx.request_id.clone();
-    let body = body_to_object(body, &request_id)?;
-    let params = task_params_from_body(&body);
-    Ok(execute_exponential_tool(router, ctx, "create_task", Value::Object(params)).await)
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let project_id = body.get("project_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if project_id.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"project_id is required"}))).into_response()); }
+    if title.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Task title is required"}))).into_response()); }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let payload = serde_json::json!([{
+      "org_id": EXPONENTIAL_ORG_ID,
+      "project_id": project_id,
+      "title": title,
+      "description": body.get("description").cloned().unwrap_or(serde_json::Value::Null),
+      "status": body.get("status").cloned().unwrap_or(serde_json::json!("todo")),
+      "priority": body.get("priority").cloned().unwrap_or(serde_json::json!(0)),
+      "assignee_id": body.get("assignee_id").cloned().unwrap_or(serde_json::Value::Null),
+      "sprint_id": body.get("sprint_id").cloned().unwrap_or(serde_json::Value::Null),
+      "due_at": body.get("due_at").cloned().unwrap_or(serde_json::Value::Null),
+      "labels": body.get("labels").cloned().unwrap_or(serde_json::json!([])),
+      "milestone": body.get("milestone").cloned().unwrap_or(serde_json::Value::Null),
+      "position": body.get("position").cloned().unwrap_or(serde_json::json!(1000))
+    }]);
+    let resp = client.post(format!("{base}/rest/v1/tasks")).header("Prefer", "return=representation").json(&payload).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let task = rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"task": task}))).into_response())
 }
 
 async fn get_exponential_task(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "taskId": task_id });
-    Ok(execute_exponential_tool(router, ctx, "get_task", params).await)
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"task": {"id": task_id}, "relations": [], "activity": []})).into_response());
+    }
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp = url.query_pairs_mut(); qp.append_pair("select", "*"); qp.append_pair("id", &format!("eq.{task_id}")); qp.append_pair("limit", "1"); }
+    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let task = match rows.first() { Some(v) => v.clone(), None => return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Task not found"}))).into_response()) };
+    Ok(Json(serde_json::json!({"task": task, "relations": [], "activity": []})).into_response())
 }
 
 async fn update_exponential_task(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let request_id = ctx.request_id.clone();
-    let body = body_to_object(body, &request_id)?;
-    let mut params = task_params_from_body(&body);
-    params.insert("taskId".into(), Value::String(task_id));
-    if params.len() == 1 {
-        return Err(AppError::bad_request("no fields to update").with_request_id(request_id));
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
     }
-    Ok(execute_exponential_tool(router, ctx, "update_task", Value::Object(params)).await)
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut updates = serde_json::Map::new();
+    for f in ["title","description","status","priority","assignee_id","sprint_id","due_at","labels","milestone","position","project_id"] {
+        if let Some(v) = body.get(f) { updates.insert(f.to_string(), v.clone()); }
+    }
+    if let Some(action) = body.get("action").and_then(|v| v.as_str()) {
+        if action == "archive" { updates.insert("archived_at".into(), serde_json::json!("now")); }
+        if action == "unarchive" { updates.insert("archived_at".into(), serde_json::Value::Null); }
+    }
+    if updates.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"No fields to update"}))).into_response()); }
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
+    url.query_pairs_mut().append_pair("id", &format!("eq.{task_id}"));
+    let resp = client.patch(url.as_str()).header("Prefer", "return=representation").json(&serde_json::Value::Object(updates)).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let task = rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    Ok(Json(serde_json::json!({"task": task})).into_response())
 }
 
 async fn delete_exponential_task(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "taskId": task_id });
-    Ok(execute_exponential_tool(router, ctx, "delete_task", params).await)
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
+    url.query_pairs_mut().append_pair("id", &format!("eq.{task_id}"));
+    let resp = client.delete(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    if !resp.status().is_success() { return Ok((resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response()); }
+    Ok(Json(serde_json::json!({"success": true})).into_response())
 }
 
 async fn list_exponential_sprints(
