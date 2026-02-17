@@ -13,7 +13,7 @@ fn rich_html_builder() -> Builder<'static> {
     let mut tag_attributes: HashMap<&str, HashSet<&str>> = HashMap::new();
     tag_attributes.insert(
         "a",
-        ["href", "title", "target", "rel"].into_iter().collect(),
+        ["href", "title", "target"].into_iter().collect(),
     );
     tag_attributes.insert("span", ["class"].into_iter().collect());
 
@@ -38,5 +38,28 @@ pub fn sanitize_description_value(value: &serde_json::Value) -> serde_json::Valu
         serde_json::Value::String(s) => serde_json::Value::String(sanitize_rich_html(s)),
         serde_json::Value::Null => serde_json::Value::Null,
         _ => serde_json::Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_rich_html;
+
+    #[test]
+    fn strips_script_and_event_handlers() {
+        let dirty = r#"<p>Hello</p><img src=x onerror=alert(1)><script>alert(2)</script>"#;
+        let clean = sanitize_rich_html(dirty);
+        assert!(clean.contains("<p>Hello</p>"));
+        assert!(!clean.contains("<script"));
+        assert!(!clean.contains("onerror"));
+    }
+
+    #[test]
+    fn blocks_javascript_protocol_and_keeps_safe_link() {
+        let dirty = r#"<a href="javascript:alert(1)">bad</a><a href="https://safe.com">safe</a>"#;
+        let clean = sanitize_rich_html(dirty);
+        assert!(!clean.contains("javascript:"));
+        assert!(clean.contains("https://safe.com"));
+        assert!(clean.contains("noopener noreferrer nofollow"));
     }
 }
