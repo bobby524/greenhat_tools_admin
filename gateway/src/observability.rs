@@ -80,6 +80,8 @@ impl Observability {
             status = log.status,
             x_request_id = %log.x_request_id,
             latency_ms = log.latency_ms,
+            user_id = ?log.user_id,
+            roles = ?log.roles,
             upstream_status = ?log.upstream_status,
             upstream_latency_ms = ?log.upstream_latency_ms,
             timeout_hit = log.timeout_hit,
