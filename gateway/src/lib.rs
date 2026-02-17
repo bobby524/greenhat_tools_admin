@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::audit::AuditLog;
 use crate::auth::{AuthState, BetterAuthClient};
 use crate::config::GatewayConfig;
-use crate::egress::{EgressClient, EgressConfig, EgressError};
+use crate::egress::{EgressClient, EgressError};
 use crate::error::AppError;
 use crate::middleware::auth::auth_middleware;
 use crate::middleware::csrf::{csrf_middleware, CsrfConfig};
@@ -801,64 +801,6 @@ fn body_to_object(body: Value, request_id: &str) -> Result<Map<String, Value>, A
 
 fn pick_value<'a>(map: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|k| map.get(*k))
-}
-
-fn task_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
-    let mut params = Map::new();
-    if let Some(v) = pick_value(body, &["projectId", "project_id"]) {
-        params.insert("projectId".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["title"]) {
-        params.insert("title".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["description"]) {
-        params.insert("description".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["status"]) {
-        params.insert("status".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["priority"]) {
-        params.insert("priority".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["assigneeId", "assignee_id"]) {
-        params.insert("assigneeId".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["sprintId", "sprint_id"]) {
-        params.insert("sprintId".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["dueAt", "due_at"]) {
-        params.insert("dueAt".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["labels"]) {
-        params.insert("labels".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["milestone"]) {
-        params.insert("milestone".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["position"]) {
-        params.insert("position".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["action"]) {
-        params.insert("action".into(), v.clone());
-    }
-    params
-}
-
-fn sprint_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
-    let mut params = Map::new();
-    if let Some(v) = pick_value(body, &["projectId", "project_id"]) {
-        params.insert("projectId".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["name"]) {
-        params.insert("name".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["startDate", "start_date"]) {
-        params.insert("startDate".into(), v.clone());
-    }
-    if let Some(v) = pick_value(body, &["endDate", "end_date"]) {
-        params.insert("endDate".into(), v.clone());
-    }
-    params
 }
 
 fn project_params_from_body(body: &Map<String, Value>) -> Map<String, Value> {
