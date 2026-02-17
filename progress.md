@@ -153,6 +153,10 @@ Keep it short, factual, and link to commits/files.
 - Added Rust-native egress proxy handlers for project/team list + detail reads to avoid tool-router queue lane and rewrite loops.
 - Files: `gateway/src/lib.rs`, `progress.md`.
 
+### Exponential task deterministic reads (Phase2-C) ✅
+- Moved high-traffic task reads (list, detail, comments) onto explicit egress proxy handlers to reduce tool-router use during task navigation.
+- Files: `gateway/src/lib.rs`, `progress.md`.
+
 ### AuthZ: RBAC + module entitlements middleware (deny-by-default) ✅
 - **Policy loading:** `POLICY_FILE` env var → JSON matching `docs/schemas/policy.v0.schema.json`.
   Loaded at startup; panics on missing/invalid file.  Schema version validated (must be `0.x.y`).

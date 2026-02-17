@@ -296,6 +296,56 @@ async fn proxy_exponential_teams_list(
     .await
 }
 
+async fn proxy_exponential_tasks_list(
+    State(state): State<EgressProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        "/api/exponential/tasks".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_task_detail(
+    State(state): State<EgressProxyState>,
+    Path(task_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/tasks/{task_id}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_task_comments(
+    State(state): State<EgressProxyState>,
+    Path(task_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/tasks/{task_id}/comments"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
 async fn proxy_exponential_team_detail(
     State(state): State<EgressProxyState>,
     Path(team_id): Path<String>,
@@ -1394,16 +1444,28 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/tasks",
-            axum::routing::get(list_exponential_tasks)
-                .post(create_exponential_task)
-                .with_state(tool_router.clone()),
+            axum::routing::get(proxy_exponential_tasks_list)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/tasks",
+            axum::routing::post(create_exponential_task).with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/tasks/{task_id}",
-            axum::routing::get(get_exponential_task)
-                .patch(update_exponential_task)
+            axum::routing::get(proxy_exponential_task_detail)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/tasks/{task_id}",
+            axum::routing::patch(update_exponential_task)
                 .delete(delete_exponential_task)
                 .with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/tasks/{task_id}/comments",
+            axum::routing::get(proxy_exponential_task_comments)
+                .with_state(exponential_egress_state.clone()),
         )
         .route(
             "/api/exponential/sprints",
@@ -1599,14 +1661,12 @@ mod tests {
     use http_body_util::BodyExt;
     use std::collections::HashSet;
     use std::sync::Arc;
-    use std::time::Duration;
     use tower::ServiceExt;
 
     use crate::auth::{AuthMethod, Principal};
     use crate::egress::{EgressClient, EgressConfig};
     use crate::middleware::rbac::{rbac_middleware, RbacState};
     use crate::rbac::{Policy, PolicyEngine};
-    use crate::tool_router::{ToolRuntimeConfig, ToolRuntimeToolConfig};
 
     async fn body_json(resp: Response) -> serde_json::Value {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1635,68 +1695,24 @@ mod tests {
         }
     }
 
-    fn build_tool_router() -> ToolRouter {
-        let mut allowed_hosts = HashSet::new();
-        allowed_hosts.insert("example.com".to_owned());
-        let egress_cfg = EgressConfig {
-            allowed_hosts,
-            deny_private_ips: false,
-            ..EgressConfig::default()
-        };
-
-        let mut tool_cfg = ToolRuntimeConfig::builtins();
-        tool_cfg.tools.insert(
-            "list_tasks".into(),
-            ToolRuntimeToolConfig {
-                enabled: true,
-                timeout: Duration::from_secs(5),
-                max_concurrent: 4,
-            },
-        );
-
-        let response = serde_json::json!({
-            "tasks": [{ "id": "task_1" }],
-            "nextCursor": null
-        })
-        .to_string();
-
-        let egress = EgressClient::new(egress_cfg).with_static_response(200, response);
-        ToolRouter::new_with_config(egress, tool_cfg)
-    }
-
-    fn build_router(
-        tool_router: ToolRouter,
-        rbac_state: RbacState,
-        principal: Option<Principal>,
-    ) -> Router {
-        let mut router = Router::new().route(
-            "/api/exponential/tasks",
-            get(list_exponential_tasks).with_state(tool_router),
-        );
-
-        router = router.layer(axum_mw::from_fn_with_state(rbac_state, rbac_middleware));
-
-        if let Some(p) = principal {
-            router = router.layer(axum_mw::from_fn(
-                move |mut req: Request<Body>, next: Next| {
-                    let p = p.clone();
-                    async move {
-                        req.extensions_mut().insert(p);
-                        next.run(req).await
-                    }
-                },
-            ));
-        }
-
-        router
-    }
-
     fn build_proxy_router(
         proxy_state: EgressProxyState,
         rbac_state: RbacState,
         principal: Option<Principal>,
     ) -> Router {
         let mut router = Router::new()
+            .route(
+                "/api/exponential/tasks",
+                get(proxy_exponential_tasks_list).with_state(proxy_state.clone()),
+            )
+            .route(
+                "/api/exponential/tasks/{task_id}",
+                get(proxy_exponential_task_detail).with_state(proxy_state.clone()),
+            )
+            .route(
+                "/api/exponential/tasks/{task_id}/comments",
+                get(proxy_exponential_task_comments).with_state(proxy_state.clone()),
+            )
             .route(
                 "/api/exponential/projects",
                 get(proxy_exponential_projects_list).with_state(proxy_state.clone()),
@@ -1736,15 +1752,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exponential_tasks_auth_and_shape() {
-        std::env::set_var("EXPONENTIAL_API_BASE_URL", "https://example.com");
-
-        let tool_router = build_tool_router();
+    async fn exponential_tasks_read_auth_and_shape() {
         let policy = test_policy();
         let engine = Arc::new(PolicyEngine::new(policy));
         let rbac_state = RbacState::new(engine, AuditLog::from_env());
 
-        let unauth_router = build_router(tool_router.clone(), rbac_state.clone(), None);
+        let mut allowed_hosts = HashSet::new();
+        allowed_hosts.insert("example.com".to_owned());
+        let egress_cfg = EgressConfig {
+            allowed_hosts,
+            deny_private_ips: false,
+            ..EgressConfig::default()
+        };
+
+        let response = serde_json::json!({
+            "tasks": [{ "id": "task_1" }],
+            "task": { "id": "task_1" },
+            "comments": [{ "id": "comment_1" }]
+        })
+        .to_string();
+
+        let egress = EgressClient::new(egress_cfg).with_static_response(200, response);
+        let proxy_state = EgressProxyState {
+            client: egress,
+            upstream_base: "https://example.com".to_string(),
+        };
+
+        let unauth_router = build_proxy_router(proxy_state.clone(), rbac_state.clone(), None);
         let resp = unauth_router
             .oneshot(
                 Request::builder()
@@ -1757,8 +1791,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-        let authed_router = build_router(tool_router, rbac_state, Some(test_principal()));
-        let resp = authed_router
+        let authed_router = build_proxy_router(proxy_state, rbac_state, Some(test_principal()));
+        let resp = authed_router.clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/tasks")
@@ -1771,6 +1805,34 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_json(resp).await;
         assert!(body.get("tasks").and_then(|v| v.as_array()).is_some());
+
+        let resp = authed_router.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/tasks/task_1")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("task").and_then(|v| v.as_object()).is_some());
+
+        let resp = authed_router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/tasks/task_1/comments")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("comments").and_then(|v| v.as_array()).is_some());
     }
 
     #[tokio::test]
