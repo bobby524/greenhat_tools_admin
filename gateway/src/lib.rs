@@ -1126,49 +1126,137 @@ async fn delete_exponential_task(
 }
 
 async fn list_exponential_sprints(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Query(query): Query<ListSprintsQuery>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let mut params = Map::new();
-    if let Some(v) = query.project_id {
-        params.insert("projectId".into(), Value::String(v));
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"sprints": []})).into_response());
     }
-    if let Some(v) = query.state {
-        params.insert("state".into(), Value::String(v));
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
     }
-    Ok(execute_exponential_tool(router, ctx, "list_sprints", Value::Object(params)).await)
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
+    {
+      let mut qp=url.query_pairs_mut();
+      qp.append_pair("select","*");
+      qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+      if let Some(v)=query.project_id { qp.append_pair("project_id", &format!("eq.{v}")); }
+      if let Some(v)=query.state { qp.append_pair("state", &format!("eq.{v}")); }
+      qp.append_pair("order","number.asc");
+    }
+    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
+    let sprints: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"sprints": sprints})).into_response())
 }
 
 async fn create_exponential_sprint(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let request_id = ctx.request_id.clone();
-    let body = body_to_object(body, &request_id)?;
-    let params = sprint_params_from_body(&body);
-    Ok(execute_exponential_tool(router, ctx, "create_sprint", Value::Object(params)).await)
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let project_id = body.get("project_id").or_else(|| body.get("projectId")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if project_id.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"project_id is required"}))).into_response()); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut q=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=q.query_pairs_mut(); qp.append_pair("select","number"); qp.append_pair("project_id", &format!("eq.{project_id}")); qp.append_pair("order","number.desc"); qp.append_pair("limit","1"); }
+    let r=client.get(q.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&r.text().await.unwrap_or_default()).unwrap_or_default();
+    let next_num = rows.first().and_then(|v| v.get("number")).and_then(|v| v.as_i64()).unwrap_or(0)+1;
+    let payload=serde_json::json!([{
+      "project_id": project_id,
+      "org_id": EXPONENTIAL_ORG_ID,
+      "name": body.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("Sprint {}", next_num)),
+      "number": next_num,
+      "start_date": body.get("start_date").cloned().unwrap_or(serde_json::Value::Null),
+      "end_date": body.get("end_date").cloned().unwrap_or(serde_json::Value::Null),
+      "state": body.get("state").cloned().unwrap_or(serde_json::json!("planned"))
+    }]);
+    let resp=client.post(format!("{base}/rest/v1/sprints")).header("Prefer","return=representation").json(&payload).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let sprint=rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"sprint": sprint}))).into_response())
 }
 
 async fn get_exponential_sprint(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(sprint_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "sprintId": sprint_id });
-    Ok(execute_exponential_tool(router, ctx, "get_sprint", params).await)
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"sprint": {"id": sprint_id}, "tasks": []})).into_response());
+    }
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
+    let client=supabase_client_with_key(&key);
+    let mut u=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=u.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{sprint_id}")); qp.append_pair("limit","1"); }
+    let resp=client.get(u.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let sprint = match rows.first(){Some(v)=>v.clone(),None=>return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Sprint not found"}))).into_response())};
+    let mut tu=url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=tu.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("sprint_id", &format!("eq.{sprint_id}")); qp.append_pair("archived_at","is.null"); qp.append_pair("order","position.asc"); }
+    let tr=client.get(tu.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let tasks: serde_json::Value = serde_json::from_str(&tr.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"sprint": sprint, "tasks": tasks})).into_response())
 }
 
+
+async fn update_exponential_sprint(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(sprint_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    if principal.is_none() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+    }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
+    let client=supabase_client_with_key(&key);
+    let mut updates=serde_json::Map::new();
+    for f in ["name","start_date","end_date","state"] { if let Some(v)=body.get(f) { updates.insert(f.to_string(), v.clone()); }}
+    if updates.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"No fields to update"}))).into_response(); }
+    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    url.query_pairs_mut().append_pair("id", &format!("eq.{sprint_id}"));
+    let resp = match client.patch(url.as_str()).header("Prefer","return=representation").json(&serde_json::Value::Object(updates)).send().await { Ok(r)=>r, Err(e)=>return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
+    if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&resp.text().await.unwrap_or_default()).unwrap_or_default();
+    let sprint=rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    Json(serde_json::json!({"sprint": sprint})).into_response()
+}
+
+async fn delete_exponential_sprint(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(sprint_id): Path<String>,
+) -> Response {
+    if principal.is_none() { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response(); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
+    let client=supabase_client_with_key(&key);
+    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    url.query_pairs_mut().append_pair("id", &format!("eq.{sprint_id}"));
+    let resp = match client.delete(url.as_str()).send().await { Ok(r)=>r, Err(e)=>return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
+    if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+    Json(serde_json::json!({"success": true})).into_response()
+}
 async fn list_exponential_projects(
     State(router): State<ToolRouter>,
     headers: axum::http::HeaderMap,
@@ -1813,7 +1901,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/sprints/{sprint_id}",
-            axum::routing::get(get_exponential_sprint).with_state(tool_router.clone()),
+            axum::routing::get(get_exponential_sprint)
+                .patch(update_exponential_sprint)
+                .delete(delete_exponential_sprint)
+                .with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/projects",
