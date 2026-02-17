@@ -140,6 +140,10 @@ The gateway reads configuration from **environment variables**:
 |-------------|-----------------------------------------|-------------------------------|
 | `PORT`      | `8080`                                  | HTTP listen port              |
 | `RUST_LOG`  | `gateway=debug,tower_http=debug`        | Tracing filter                |
+| `RATE_LIMIT_READ_RPS` | `12` | Read lane sustained RPS (GET/HEAD) |
+| `RATE_LIMIT_READ_BURST` | `40` | Read lane burst tokens |
+| `RATE_LIMIT_WRITE_RPS` | `8` | Write lane sustained RPS (POST/PUT/PATCH/DELETE) |
+| `RATE_LIMIT_WRITE_BURST` | `20` | Write lane burst tokens |
 
 > Future: secrets (DB credentials, API keys) will come from a secrets
 > manager (e.g., GH Actions secrets → Docker env, or Vault / AWS SSM in

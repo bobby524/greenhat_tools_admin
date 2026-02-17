@@ -189,6 +189,35 @@ Keep it short, factual, and link to commits/files.
 - Added auth/shape test for `/api/exponential/tasks` and route mapping test for RBAC.
 - Files: `gateway/src/lib.rs`, `gateway/src/rbac/engine.rs`, `gateway/src/tool_router.rs`, `gateway/src/lib.rs` (tests), `docs/schemas/exponential_tools.v0.schema.json`, `docs/EXponential_TOOL_MIGRATION_PLAN.md`.
 
+## 2026-02-16 — Phase 3 migration (start)
+
+### Exponential deterministic reads (gateway) ✅
+- Removed Exponential egress proxy read lanes for tasks/projects/sprints in favor of tool-router handlers.
+- Dropped the `/api/exponential/{*path}` passthrough to prevent mixed-routing loops; remaining proxy reads are explicit.
+- Files: `gateway/src/lib.rs`, `progress.md`.
+
+## 2026-02-17 — Optimization/security sync ✅
+
+### Rate-limit split + route/session keying ✅
+- Read/write lane split implemented and live:
+  - Read: `RATE_LIMIT_READ_RPS`, `RATE_LIMIT_READ_BURST`
+  - Write: `RATE_LIMIT_WRITE_RPS`, `RATE_LIMIT_WRITE_BURST`
+- Session-aware + route-bucket keying in middleware reduces NAT false positives and isolates hot routes.
+- Commit: `57086464`
+
+### XSS hardening sequence completed (gateway write paths) ✅
+- Task description write sanitization: `e593bfa6`
+- Description sanitizer regression tests: `e1c4f5dc`
+- Task comment write sanitization: `0d40f26d`
+
+### Better Stack shipping status ✅
+- Gateway has optional env-gated Better Stack shipper in observability middleware.
+- Alerting remains externalized to Better Stack monitor configuration (no in-code alert rules).
+
+### Current open items
+- Add first-class runbook docs for Better Stack alert thresholds (5xx/latency/timeouts).
+- Add explicit compact-route metrics dashboard for Exponential high-volume reads.
+
 ## Tooling
 
 ### CodeGraphContext (codegraph MCP)

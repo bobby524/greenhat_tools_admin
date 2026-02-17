@@ -9,6 +9,8 @@ The API MCP Gateway ships with a built-in observability stack:
 | **Distributed tracing** | OpenTelemetry OTLP export | ✅ Optional (feature + env) |
 | **Structured errors** | JSON error bodies with `request_id` | ✅ Always on |
 | **Request ID** | UUID v4, propagated end-to-end | ✅ Always on |
+| **Better Stack log shipping** | Async JSON shipper (`BETTERSTACK_*`) | ✅ Optional (env-gated, fail-open) |
+| **Better Stack alerting** | External Better Stack monitors/alerts | 🟡 Configured outside gateway code |
 
 ---
 
@@ -159,6 +161,19 @@ All error responses follow a uniform JSON envelope:
 
 ---
 
+## Better Stack shipping (Optional)
+
+The gateway can ship each `http_request_complete` JSON log line to Better Stack.
+
+Runtime behavior:
+- `BETTERSTACK_ENABLED=true` + valid token/host → shipping enabled
+- Missing/disabled envs → shipping disabled (gateway still runs normally)
+- Shipping failures are fail-open and logged as warnings (`failed to ship log to Better Stack`)
+
+Alerting status:
+- Alert rules (error-rate/p95/availability) are managed in Better Stack itself, not in gateway code.
+- Gateway currently emits the fields needed for alerting (`status`, `route`, `latency_ms`, `timeout_hit`, `error_kind`, `x_request_id`).
+
 ## OpenTelemetry (Optional)
 
 Distributed tracing via OTLP/gRPC is available behind the **`otel`** Cargo
@@ -233,6 +248,9 @@ docker run -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317 gateway
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | OTLP gRPC endpoint; enables OTel when set (requires `otel` feature) |
 | `OTEL_SERVICE_NAME` | `api-mcp-gateway` | Service name reported to OTel |
 | `OTEL_RESOURCE_ATTRIBUTES` | *(unset)* | Extra resource attributes (e.g. `deployment.environment=prod`) |
+| `BETTERSTACK_ENABLED` | `false` | Enable async Better Stack log shipping |
+| `BETTERSTACK_SOURCE_TOKEN` | *(unset)* | Better Stack source token (required when enabled) |
+| `BETTERSTACK_INGEST_HOST` | *(unset)* | Better Stack ingest host/url (required when enabled) |
 
 ---
 
