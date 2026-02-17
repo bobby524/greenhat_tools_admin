@@ -887,6 +887,7 @@ struct ListTasksQuery {
     team_id: Option<String>,
     search: Option<String>,
     include_archived: Option<bool>,
+    view: Option<String>,
     limit: Option<u64>,
     #[serde(rename = "cursor")]
     _cursor: Option<String>,
@@ -904,6 +905,13 @@ struct ListSprintsQuery {
 struct ListProjectsQuery {
     team_id: Option<String>,
     include_archived: Option<bool>,
+    view: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTeamsQuery {
+    view: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -919,6 +927,13 @@ struct ProjectTasksQuery {
 #[serde(rename_all = "camelCase")]
 struct PermissionQuery {
     action: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct TaskDetailQuery {
+    include_activity: Option<bool>,
+    include_relations: Option<bool>,
 }
 
 async fn list_exponential_tasks(
@@ -937,9 +952,15 @@ async fn list_exponential_tasks(
     let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    let view = query.view.as_deref();
+    let task_select = match view {
+        Some("nav") => "id,project_id,title,position,milestone,archived_at",
+        Some("summary") => "id,project_id,org_id,identifier,title,status,priority,assignee_id,sprint_id,due_at,labels,milestone,position,created_at,updated_at,archived_at,project_name,project_color,project_icon,team_id,team_name,team_slug,team_color,sprint_name",
+        _ => "*",
+    };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", task_select);
         qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
         if query.include_archived.unwrap_or(false) == false { qp.append_pair("archived_at", "is.null"); }
         if let Some(v) = query.project_id { qp.append_pair("project_id", &format!("eq.{v}")); }
@@ -1005,9 +1026,21 @@ async fn get_exponential_task(
     _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
+    Query(query): Query<TaskDetailQuery>,
 ) -> Result<Response, AppError> {
+    let include_activity = query.include_activity.unwrap_or(true);
+    let include_relations = query.include_relations.unwrap_or(true);
+
     if cfg!(test) {
-        return Ok(Json(serde_json::json!({"task": {"id": task_id}, "relations": [], "activity": []})).into_response());
+        let mut payload = serde_json::Map::new();
+        payload.insert("task".into(), serde_json::json!({ "id": task_id }));
+        if include_relations {
+            payload.insert("relations".into(), serde_json::json!([]));
+        }
+        if include_activity {
+            payload.insert("activity".into(), serde_json::json!([]));
+        }
+        return Ok(Json(serde_json::Value::Object(payload)).into_response());
     }
     if principal.is_none() {
         return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
@@ -1021,7 +1054,16 @@ async fn get_exponential_task(
     if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
     let task = match rows.first() { Some(v) => v.clone(), None => return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Task not found"}))).into_response()) };
-    Ok(Json(serde_json::json!({"task": task, "relations": [], "activity": []})).into_response())
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("task".into(), task);
+    if include_relations {
+        payload.insert("relations".into(), serde_json::json!([]));
+    }
+    if include_activity {
+        payload.insert("activity".into(), serde_json::json!([]));
+    }
+    Ok(Json(serde_json::Value::Object(payload)).into_response())
 }
 
 async fn update_exponential_task(
@@ -1225,9 +1267,16 @@ async fn list_exponential_projects(
     let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
     let client=supabase_client_with_key(&key);
     let mut url=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
+    let view = query.view.as_deref();
+    let is_sidebar_view = matches!(view, Some("sidebar"));
+    let project_select = if is_sidebar_view {
+        "id,team_id,name,color,archived_at"
+    } else {
+        "*,team:teams(id,name,slug,color)"
+    };
     {
       let mut qp=url.query_pairs_mut();
-      qp.append_pair("select","*,team:teams(id,name,slug,color)");
+      qp.append_pair("select", project_select);
       qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
       qp.append_pair("order","name.asc");
       if query.include_archived.unwrap_or(false)==false { qp.append_pair("archived_at","is.null"); }
@@ -1238,59 +1287,61 @@ async fn list_exponential_projects(
     if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
     let mut projects: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
 
-    let parse_count = |resp: &reqwest::Response| -> i64 {
-        let raw = resp
-            .headers()
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("*/0");
-        raw.rsplit('/').next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(0)
-    };
-
-    for p in &mut projects {
-        let pid = match p.get("id").and_then(|v| v.as_str()) {
-            Some(v) => v,
-            None => continue,
+    if !is_sidebar_view {
+        let parse_count = |resp: &reqwest::Response| -> i64 {
+            let raw = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("*/0");
+            raw.rsplit('/').next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(0)
         };
 
-        let mut all_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        {
-            let mut qp = all_url.query_pairs_mut();
-            qp.append_pair("select", "id");
-            qp.append_pair("project_id", &format!("eq.{pid}"));
-            qp.append_pair("archived_at", "is.null");
-        }
-        let all_resp = client
-            .get(all_url.as_str())
-            .header("Prefer", "count=exact")
-            .header("Range", "0-0")
-            .send()
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let task_count = parse_count(&all_resp);
+        for p in &mut projects {
+            let pid = match p.get("id").and_then(|v| v.as_str()) {
+                Some(v) => v,
+                None => continue,
+            };
 
-        let mut done_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        {
-            let mut qp = done_url.query_pairs_mut();
-            qp.append_pair("select", "id");
-            qp.append_pair("project_id", &format!("eq.{pid}"));
-            qp.append_pair("archived_at", "is.null");
-            qp.append_pair("status", "eq.done");
-        }
-        let done_resp = client
-            .get(done_url.as_str())
-            .header("Prefer", "count=exact")
-            .header("Range", "0-0")
-            .send()
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        let completed_count = parse_count(&done_resp);
+            let mut all_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            {
+                let mut qp = all_url.query_pairs_mut();
+                qp.append_pair("select", "id");
+                qp.append_pair("project_id", &format!("eq.{pid}"));
+                qp.append_pair("archived_at", "is.null");
+            }
+            let all_resp = client
+                .get(all_url.as_str())
+                .header("Prefer", "count=exact")
+                .header("Range", "0-0")
+                .send()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let task_count = parse_count(&all_resp);
 
-        if let Some(obj) = p.as_object_mut() {
-            obj.insert("task_count".to_string(), serde_json::json!(task_count));
-            obj.insert("completed_count".to_string(), serde_json::json!(completed_count));
+            let mut done_url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            {
+                let mut qp = done_url.query_pairs_mut();
+                qp.append_pair("select", "id");
+                qp.append_pair("project_id", &format!("eq.{pid}"));
+                qp.append_pair("archived_at", "is.null");
+                qp.append_pair("status", "eq.done");
+            }
+            let done_resp = client
+                .get(done_url.as_str())
+                .header("Prefer", "count=exact")
+                .header("Range", "0-0")
+                .send()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let completed_count = parse_count(&done_resp);
+
+            if let Some(obj) = p.as_object_mut() {
+                obj.insert("task_count".to_string(), serde_json::json!(task_count));
+                obj.insert("completed_count".to_string(), serde_json::json!(completed_count));
+            }
         }
     }
 
@@ -1345,13 +1396,19 @@ async fn list_exponential_teams(
     _headers: axum::http::HeaderMap,
     _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Query(query): Query<ListTeamsQuery>,
 ) -> Result<Response, AppError> {
     if cfg!(test) { return Ok(Json(serde_json::json!({"teams": []})).into_response()); }
     if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
     let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
     let client=supabase_client_with_key(&key);
     let mut url=url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=url.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}")); qp.append_pair("order","name.asc"); }
+    let team_select = if matches!(query.view.as_deref(), Some("sidebar")) {
+        "id,name,slug,color"
+    } else {
+        "*"
+    };
+    { let mut qp=url.query_pairs_mut(); qp.append_pair("select", team_select); qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}")); qp.append_pair("order","name.asc"); }
     let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
     let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
     if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
@@ -2414,6 +2471,24 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_json(resp).await;
         assert!(body.get("task").and_then(|v| v.as_object()).is_some());
+        assert!(body.get("activity").and_then(|v| v.as_array()).is_some());
+        assert!(body.get("relations").and_then(|v| v.as_array()).is_some());
+
+        let resp = authed_router.clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/exponential/tasks/task_1?includeActivity=false&includeRelations=false")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert!(body.get("task").and_then(|v| v.as_object()).is_some());
+        assert!(body.get("activity").is_none());
+        assert!(body.get("relations").is_none());
 
         let resp = authed_router
             .oneshot(
