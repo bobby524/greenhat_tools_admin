@@ -123,3 +123,8 @@ See:
 - `docs/schemas/mcp_tool_call_request.v0.schema.json`
 - `docs/schemas/mcp_tool_call_response.v0.schema.json`
 - `docs/openapi/mcp.v1.yaml`
+
+## Implementation best-practice reference
+
+For refactoring additional modules into the Rust gateway pattern, use:
+- `docs/RUST_API_BEST_PRACTICES.md`
