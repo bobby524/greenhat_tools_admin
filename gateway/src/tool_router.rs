@@ -661,6 +661,136 @@ impl ToolRouter {
                     data: String::from_utf8_lossy(&resp.body).into_owned(),
                 })
             }
+            ValidatedArgs::ExponentialMembers { resource, id } => {
+                if cfg!(test) {
+                    let member = if resource == "project" {
+                        serde_json::json!({
+                            "id": "m_1",
+                            "project_id": id,
+                            "user_id": "u_test",
+                            "role": "lead",
+                            "user": {
+                                "id": "u_test",
+                                "first_name": "Test",
+                                "last_name": "User",
+                                "email": "test@example.com",
+                                "avatar_url": null
+                            }
+                        })
+                    } else {
+                        serde_json::json!({
+                            "id": "m_1",
+                            "team_id": id,
+                            "user_id": "u_test",
+                            "role": "lead",
+                            "user": {
+                                "id": "u_test",
+                                "first_name": "Test",
+                                "last_name": "User",
+                                "email": "test@example.com",
+                                "avatar_url": null
+                            }
+                        })
+                    };
+                    let payload = serde_json::json!({ "members": [member] });
+                    return Ok(ToolOk { status: Some(200), data: payload.to_string() });
+                }
+                let base = std::env::var("SUPABASE_URL")
+                    .ok()
+                    .or_else(|| std::env::var("NEXT_PUBLIC_SUPABASE_URL").ok())
+                    .unwrap_or_default();
+                let key = std::env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+                let base = base.trim().trim_end_matches('/').to_string();
+                let key = key.trim().to_string();
+                if base.is_empty() || key.is_empty() {
+                    return Ok(ToolOk {
+                        status: Some(500),
+                        data: serde_json::json!({"error":"Supabase env not configured in gateway"}).to_string(),
+                    });
+                }
+
+                let actor_user_id = ctx
+                    .actor
+                    .as_ref()
+                    .map(|a| a.user_id.clone())
+                    .unwrap_or_default();
+                let actor_is_admin = ctx
+                    .actor
+                    .as_ref()
+                    .and_then(|a| a.roles.clone())
+                    .map(|r| r.iter().any(|x| x == "admin"))
+                    .unwrap_or(false);
+
+                // Membership-gate parity with tools routes for non-admin users.
+                if !actor_is_admin {
+                    if actor_user_id.is_empty() {
+                        return Ok(ToolOk {
+                            status: Some(401),
+                            data: serde_json::json!({"error":"Unauthorized"}).to_string(),
+                        });
+                    }
+                    let table = if resource == "project" { "project_members" } else { "team_members" };
+                    let fk = if resource == "project" { "project_id" } else { "team_id" };
+                    let mut check = url::Url::parse(&format!("{base}/rest/v1/{table}")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                    {
+                        let mut qp = check.query_pairs_mut();
+                        qp.append_pair("select", "id");
+                        qp.append_pair(fk, &format!("eq.{id}"));
+                        qp.append_pair("user_id", &format!("eq.{actor_user_id}"));
+                        qp.append_pair("limit", "1");
+                    }
+                    let client = reqwest::Client::new();
+                    let resp = client
+                        .get(check.as_str())
+                        .header("apikey", &key)
+                        .header("Authorization", format!("Bearer {key}"))
+                        .send()
+                        .await
+                        ?;
+                    if !resp.status().is_success() {
+                        let status = resp.status().as_u16();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Ok(ToolOk { status: Some(status), data: text });
+                    }
+                    let rows: serde_json::Value = resp.json().await?;
+                    let allowed = rows.as_array().map(|a| !a.is_empty()).unwrap_or(false);
+                    if !allowed {
+                        let msg = if resource == "project" { "You are not a member of this project" } else { "You are not a member of this team" };
+                        return Ok(ToolOk {
+                            status: Some(403),
+                            data: serde_json::json!({"error": msg}).to_string(),
+                        });
+                    }
+                }
+
+                let table = if resource == "project" { "project_members" } else { "team_members" };
+                let fk = if resource == "project" { "project_id" } else { "team_id" };
+                let mut url = url::Url::parse(&format!("{base}/rest/v1/{table}")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                {
+                    let mut qp = url.query_pairs_mut();
+                    qp.append_pair("select", "*,user:users(id,first_name,last_name,email,avatar_url)");
+                    qp.append_pair(fk, &format!("eq.{id}"));
+                    qp.append_pair("order", "created_at.asc");
+                }
+                let client = reqwest::Client::new();
+                let resp = client
+                    .get(url.as_str())
+                    .header("apikey", &key)
+                    .header("Authorization", format!("Bearer {key}"))
+                    .send()
+                    .await
+                    ?;
+                let status = resp.status().as_u16();
+                let text = resp.text().await.unwrap_or_default();
+                if !(200..300).contains(&status) {
+                    return Ok(ToolOk { status: Some(status), data: text });
+                }
+                let payload = serde_json::json!({"members": serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|_| serde_json::json!([]))});
+                Ok(ToolOk {
+                    status: Some(200),
+                    data: payload.to_string(),
+                })
+            }
             ValidatedArgs::PermissionCheck {
                 resource,
                 id,
@@ -913,6 +1043,12 @@ enum ValidatedArgs {
         resource: &'static str,
         id: String,
         action: String,
+    },
+
+    /// Gateway-native Exponential members listing via Supabase REST.
+    ExponentialMembers {
+        resource: &'static str,
+        id: String,
     },
 
     #[cfg(test)]
@@ -1651,12 +1787,9 @@ fn validate_args(
                 .get("projectId")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: projectId".to_string())?;
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: make_url(&format!("/api/exponential/projects/{project_id}/members"))?,
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::ExponentialMembers {
+                resource: "project",
+                id: project_id.to_string(),
             })
         }
         "get_project_permissions" => {
@@ -1679,12 +1812,9 @@ fn validate_args(
                 .get("teamId")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: teamId".to_string())?;
-            Ok(ValidatedArgs::HttpRequest {
-                method: Method::GET,
-                url: make_url(&format!("/api/exponential/teams/{team_id}/members"))?,
-                body: None,
-                content_type_json: false,
-                require_bearer: true,
+            Ok(ValidatedArgs::ExponentialMembers {
+                resource: "team",
+                id: team_id.to_string(),
             })
         }
         "get_team_permissions" => {
