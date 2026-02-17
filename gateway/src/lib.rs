@@ -41,7 +41,7 @@ use crate::middleware::rbac::{rbac_middleware, RbacState};
 use crate::middleware::validate::{validate_request, ValidationConfig};
 use crate::observability::{request_log_middleware, Observability, UpstreamTrace, X_REQUEST_ID};
 use crate::rbac::{Policy, PolicyEngine};
-use crate::rich_text::sanitize_description_value;
+use crate::rich_text::{sanitize_description_value, sanitize_rich_html};
 use crate::tool_router::{ToolAuditCtx, ToolRequest, ToolRouter};
 use axum::extract::State;
 use axum::http::header;
@@ -1518,7 +1518,8 @@ async fn create_exponential_task_comment(
     Json(body): Json<Value>,
 ) -> Response {
     let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
-    let text = body.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let raw_text = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
+    let text = sanitize_rich_html(raw_text).trim().to_string();
     if text.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Comment body is required"}))).into_response(); }
     let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
     let client=supabase_client_with_key(&key);
