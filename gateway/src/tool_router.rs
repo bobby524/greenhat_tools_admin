@@ -703,9 +703,37 @@ impl ToolRouter {
                 let base = base.trim().trim_end_matches('/').to_string();
                 let key = key.trim().to_string();
                 if base.is_empty() || key.is_empty() {
+                    // Safe fallback until Supabase secrets are provisioned on gateway.
+                    let upstream_base = exponential_base_url();
+                    let path = if resource == "project" {
+                        format!("/api/exponential/projects/{id}/members")
+                    } else {
+                        format!("/api/exponential/teams/{id}/members")
+                    };
+                    let url = format!("{upstream_base}{path}");
+
+                    let mut headers = HeaderMap::new();
+                    headers.insert(
+                        HeaderName::from_static("x-gateway-internal"),
+                        HeaderValue::from_static("1"),
+                    );
+                    if let Some(ref authz) = ctx.upstream_authorization {
+                        if let Ok(v) = HeaderValue::from_str(authz) {
+                            headers.insert(AUTHORIZATION, v);
+                        }
+                    }
+                    if let Some(ref cookie) = ctx.upstream_cookie {
+                        if let Ok(v) = HeaderValue::from_str(cookie) {
+                            headers.insert(COOKIE, v);
+                        }
+                    }
+                    let resp = self
+                        .egress
+                        .request_with_headers(Method::GET, &url, None, Some(headers))
+                        .await?;
                     return Ok(ToolOk {
-                        status: Some(500),
-                        data: serde_json::json!({"error":"Supabase env not configured in gateway"}).to_string(),
+                        status: Some(resp.status),
+                        data: String::from_utf8_lossy(&resp.body).into_owned(),
                     });
                 }
 
