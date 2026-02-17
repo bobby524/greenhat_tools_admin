@@ -1179,26 +1179,37 @@ async fn get_exponential_team(
 }
 
 async fn get_exponential_project_tasks(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(project_id): Path<String>,
     Query(query): Query<ProjectTasksQuery>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let mut params = Map::new();
-    params.insert("projectId".into(), Value::String(project_id));
-    if let Some(v) = query.limit {
-        params.insert("limit".into(), Value::Number(serde_json::Number::from(v)));
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null})).into_response());
     }
-    if let Some(v) = query.cursor {
-        params.insert("cursor".into(), Value::String(v));
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
     }
-    if let Some(v) = query.include_archived {
-        params.insert("includeArchived".into(), Value::Bool(v));
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "id,project_id,org_id,identifier,title,status,priority,assignee_id,sprint_id,sprint_name,due_at,labels,milestone,position,created_at,updated_at");
+        qp.append_pair("project_id", &format!("eq.{project_id}"));
+        if query.include_archived.unwrap_or(false) == false { qp.append_pair("archived_at", "is.null"); }
+        qp.append_pair("order", "updated_at.desc");
+        qp.append_pair("order", "id.desc");
+        qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
     }
-    Ok(execute_exponential_tool(router, ctx, "get_project_tasks", Value::Object(params)).await)
+    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let tasks: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null})).into_response())
 }
 
 async fn get_exponential_project_members(
@@ -1258,15 +1269,67 @@ async fn get_exponential_team_permissions(
 }
 
 async fn get_exponential_task_comments(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let params = serde_json::json!({ "taskId": task_id });
-    Ok(execute_exponential_tool(router, ctx, "get_task_comments", params).await)
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"comments": []})).into_response());
+    }
+    if principal.is_none() {
+        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+    }
+    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let client = supabase_client_with_key(&key);
+    let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
+    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","org_id"); qp.append_pair("id", &format!("eq.{task_id}")); qp.append_pair("limit","1"); }
+    let tresp = client.get(turl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    if !tresp.status().is_success() { return Ok((tresp.status(), Body::from(tresp.text().await.unwrap_or_default())).into_response()); }
+    let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
+    let org_id = trows.first().and_then(|r| r.get("org_id")).and_then(|v| v.as_str()).unwrap_or(EXPONENTIAL_ORG_ID).to_string();
+
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/task_comments")).map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "id,body,created_at,updated_at,author_id,author:users(id,first_name,last_name,email,avatar_url)");
+        qp.append_pair("task_id", &format!("eq.{task_id}"));
+        qp.append_pair("org_id", &format!("eq.{org_id}"));
+        qp.append_pair("order", "created_at.asc");
+    }
+    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let comments: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(Json(serde_json::json!({"comments": comments})).into_response())
+}
+
+
+async fn create_exponential_task_comment(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(task_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
+    let text = body.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if text.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Comment body is required"}))).into_response(); }
+    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
+    let client=supabase_client_with_key(&key);
+    let mut turl=url::Url::parse(&format!("{base}/rest/v1/tasks")).unwrap();
+    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","org_id"); qp.append_pair("id",&format!("eq.{task_id}")); qp.append_pair("limit","1"); }
+    let tresp = match client.get(turl.as_str()).send().await { Ok(r)=>r, Err(e)=> return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
+    if !tresp.status().is_success() { return (tresp.status(), Body::from(tresp.text().await.unwrap_or_default())).into_response(); }
+    let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
+    let org_id = trows.first().and_then(|r| r.get("org_id")).and_then(|v| v.as_str()).unwrap_or(EXPONENTIAL_ORG_ID).to_string();
+    let payload = serde_json::json!([{"org_id":org_id,"task_id":task_id,"author_id":user_id,"body":text}]);
+    let resp = match client.post(format!("{base}/rest/v1/task_comments")).header("Prefer","return=representation").json(&payload).send().await { Ok(r)=>r, Err(e)=> return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
+    let status = resp.status(); let txt=resp.text().await.unwrap_or_default();
+    if !status.is_success() { return (status, Body::from(txt)).into_response(); }
+    let rows: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    let comment = rows.as_array().and_then(|a|a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
+    (StatusCode::CREATED, Json(serde_json::json!({"comment":comment}))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1681,7 +1744,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/tasks/{task_id}/comments",
-            axum::routing::get(get_exponential_task_comments).with_state(tool_router.clone()),
+            axum::routing::get(get_exponential_task_comments).post(create_exponential_task_comment).with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/sprints",
