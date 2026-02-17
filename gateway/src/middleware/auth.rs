@@ -155,6 +155,16 @@ pub async fn auth_middleware(
                 user_id: principal.user_id.clone(),
                 roles: principal.roles.clone(),
             };
+            if let Ok(user_id) = axum::http::HeaderValue::from_str(&request_actor.user_id) {
+                req.headers_mut().insert("x-auth-user-id", user_id);
+            }
+            if !request_actor.roles.is_empty() {
+                let joined = request_actor.roles.join(",");
+                if let Ok(roles) = axum::http::HeaderValue::from_str(&joined) {
+                    req.headers_mut().insert("x-auth-roles", roles);
+                }
+            }
+
             req.extensions_mut().insert::<Principal>(principal);
             let mut response = next.run(req).await;
             response.extensions_mut().insert(request_actor);

@@ -121,6 +121,23 @@ pub async fn request_log_middleware(
         .unwrap_or("unknown")
         .to_owned();
 
+    let header_user_id = req
+        .headers()
+        .get("x-auth-user-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let header_roles = req
+        .headers()
+        .get("x-auth-roles")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+                .collect::<Vec<String>>()
+        })
+        .filter(|v| !v.is_empty());
+
     let response = next.run(req).await;
 
     let status = response.status().as_u16();
@@ -134,6 +151,9 @@ pub async fn request_log_middleware(
 
     let error_kind = upstream.error_kind.or_else(|| classify_http_error(status));
 
+    let actor_user_id = actor.as_ref().map(|a| a.user_id.clone());
+    let actor_roles = actor.as_ref().map(|a| a.roles.clone());
+
     obs.emit(RequestLog {
         service: obs.inner.service.clone(),
         route,
@@ -141,8 +161,8 @@ pub async fn request_log_middleware(
         status,
         x_request_id: request_id,
         latency_ms,
-        user_id: actor.as_ref().map(|a| a.user_id.clone()),
-        roles: actor.as_ref().map(|a| a.roles.clone()),
+        user_id: actor_user_id.or(header_user_id),
+        roles: actor_roles.or(header_roles),
         upstream_status: upstream.status,
         upstream_latency_ms: upstream.latency_ms,
         timeout_hit: upstream.timeout_hit,
