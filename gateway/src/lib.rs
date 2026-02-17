@@ -98,6 +98,7 @@ struct ApiProxyState {
     upstream_base: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct EgressProxyState {
     client: EgressClient,
@@ -579,6 +580,7 @@ async fn proxy_api_path(
     }
 }
 
+#[allow(dead_code)]
 async fn egress_proxy_api_path(
     state: EgressProxyState,
     upstream_path: String,
@@ -772,6 +774,7 @@ fn build_tool_audit_ctx(
     }
 }
 
+#[allow(dead_code)]
 fn exponential_upstream_base() -> String {
     std::env::var("EXPONENTIAL_API_BASE_URL")
         .ok()
@@ -883,7 +886,8 @@ struct ListTasksQuery {
     search: Option<String>,
     include_archived: Option<bool>,
     limit: Option<u64>,
-    cursor: Option<String>,
+    #[serde(rename = "cursor")]
+    _cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -904,7 +908,8 @@ struct ListProjectsQuery {
 #[serde(rename_all = "camelCase")]
 struct ProjectTasksQuery {
     limit: Option<u64>,
-    cursor: Option<String>,
+    #[serde(rename = "cursor")]
+    _cursor: Option<String>,
     include_archived: Option<bool>,
 }
 
@@ -2183,7 +2188,7 @@ mod tests {
 
     fn build_exponential_router(
         tool_router: ToolRouter,
-        proxy_state: EgressProxyState,
+        _proxy_state: EgressProxyState,
         rbac_state: RbacState,
         principal: Option<Principal>,
     ) -> Router {

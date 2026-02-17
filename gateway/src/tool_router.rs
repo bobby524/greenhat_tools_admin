@@ -1470,7 +1470,7 @@ fn validate_args(
 ) -> Result<ValidatedArgs, String> {
     let base = exponential_base_url();
 
-    let mut make_url = |path: &str| -> Result<String, String> {
+    let make_url = |path: &str| -> Result<String, String> {
         let url = format!("{base}{path}");
         url::Url::parse(&url).map_err(|_| "invalid url".to_string())?;
         Ok(url)
