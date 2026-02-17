@@ -2191,6 +2191,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             header::COOKIE,
             header::ACCEPT,
             header::HeaderName::from_static("x-csrf-token"),
+            header::HeaderName::from_static("x-request-id"),
         ])
         .allow_credentials(true);
 
