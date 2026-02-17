@@ -918,6 +918,14 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_projects",
             "create_project",
             "get_project",
+            "list_teams",
+            "get_team",
+            "get_project_tasks",
+            "get_project_members",
+            "get_project_permissions",
+            "get_team_members",
+            "get_team_permissions",
+            "get_task_comments",
             // Greenspot shims
             "list_greenspot_contacts",
             "create_greenspot_contact",
@@ -1033,6 +1041,14 @@ fn supported_tool_names() -> &'static [&'static str] {
             "list_projects",
             "create_project",
             "get_project",
+            "list_teams",
+            "get_team",
+            "get_project_tasks",
+            "get_project_members",
+            "get_project_permissions",
+            "get_team_members",
+            "get_team_permissions",
+            "get_task_comments",
             // Greenspot shims
             "list_greenspot_contacts",
             "create_greenspot_contact",
@@ -1557,6 +1573,129 @@ fn validate_args(
             Ok(ValidatedArgs::HttpRequest {
                 method: Method::GET,
                 url: make_url(&format!("/api/exponential/projects/{project_id}"))?,
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "list_teams" => Ok(ValidatedArgs::HttpRequest {
+            method: Method::GET,
+            url: make_url("/api/exponential/teams")?,
+            body: None,
+            content_type_json: false,
+            require_bearer: true,
+        }),
+        "get_team" => {
+            let team_id = params
+                .get("teamId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: teamId".to_string())?;
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: make_url(&format!("/api/exponential/teams/{team_id}"))?,
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_project_tasks" => {
+            let project_id = params
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: projectId".to_string())?;
+            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/projects/{project_id}/tasks"))?).unwrap();
+            {
+                let mut qp = url.query_pairs_mut();
+                if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) {
+                    qp.append_pair("limit", &v.to_string());
+                }
+                if let Some(v) = params.get("cursor").and_then(|v| v.as_str()) {
+                    qp.append_pair("cursor", v);
+                }
+                if let Some(v) = params.get("includeArchived").and_then(|v| v.as_bool()) {
+                    qp.append_pair("includeArchived", if v { "true" } else { "false" });
+                }
+            }
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: url.to_string(),
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_project_members" => {
+            let project_id = params
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: projectId".to_string())?;
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: make_url(&format!("/api/exponential/projects/{project_id}/members"))?,
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_project_permissions" => {
+            let project_id = params
+                .get("projectId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: projectId".to_string())?;
+            let action = params
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: action".to_string())?;
+            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/projects/{project_id}/permissions"))?).unwrap();
+            url.query_pairs_mut().append_pair("action", action);
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: url.to_string(),
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_team_members" => {
+            let team_id = params
+                .get("teamId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: teamId".to_string())?;
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: make_url(&format!("/api/exponential/teams/{team_id}/members"))?,
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_team_permissions" => {
+            let team_id = params
+                .get("teamId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: teamId".to_string())?;
+            let action = params
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: action".to_string())?;
+            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/teams/{team_id}/permissions"))?).unwrap();
+            url.query_pairs_mut().append_pair("action", action);
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: url.to_string(),
+                body: None,
+                content_type_json: false,
+                require_bearer: true,
+            })
+        }
+        "get_task_comments" => {
+            let task_id = params
+                .get("taskId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing required param: taskId".to_string())?;
+            Ok(ValidatedArgs::HttpRequest {
+                method: Method::GET,
+                url: make_url(&format!("/api/exponential/tasks/{task_id}/comments"))?,
                 body: None,
                 content_type_json: false,
                 require_bearer: true,
