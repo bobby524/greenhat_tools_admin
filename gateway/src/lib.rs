@@ -365,6 +365,72 @@ async fn proxy_exponential_team_permissions(
     .await
 }
 
+async fn proxy_exponential_labels(
+    State(state): State<EgressProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        "/api/exponential/labels".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_views(
+    State(state): State<EgressProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        "/api/exponential/views".to_string(),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_view_detail(
+    State(state): State<EgressProxyState>,
+    Path(view_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/views/{view_id}"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
+async fn proxy_exponential_project_assignees(
+    State(state): State<EgressProxyState>,
+    Path(project_id): Path<String>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    egress_proxy_api_path(
+        state,
+        format!("/api/exponential/projects/{project_id}/assignees"),
+        headers,
+        request_id,
+        request,
+    )
+    .await
+}
+
 async fn proxy_api_path(
     state: ApiProxyState,
     upstream_path: String,
@@ -1630,6 +1696,26 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/exponential/teams/{team_id}/permissions",
             axum::routing::get(get_exponential_team_permissions).with_state(tool_router.clone()),
+        )
+        .route(
+            "/api/exponential/labels",
+            axum::routing::any(proxy_exponential_labels)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/views",
+            axum::routing::any(proxy_exponential_views)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/views/{view_id}",
+            axum::routing::any(proxy_exponential_view_detail)
+                .with_state(exponential_egress_state.clone()),
+        )
+        .route(
+            "/api/exponential/projects/{project_id}/assignees",
+            axum::routing::any(proxy_exponential_project_assignees)
+                .with_state(exponential_egress_state),
         )
         .route(
             "/api/greenbooks/{*path}",
