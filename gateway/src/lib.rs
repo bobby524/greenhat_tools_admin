@@ -221,6 +221,127 @@ const GREENBOOKS_DEFAULT_ORG_ID: &str = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
 const GREENBOOKS_ACCOUNT_TYPES: &[&str] = &["asset", "liability", "equity", "revenue", "expense"];
 const GREENBOOKS_INVOICE_STATUSES: &[&str] =
     &["draft", "sent", "partially_paid", "paid", "overdue", "void"];
+const GREENBOOKS_ACCOUNT_SELECT: &str = "id,org_id,code,name,account_type,sub_type,parent_id,description,is_active,is_system,normal_balance,currency,created_at,updated_at";
+const GREENBOOKS_CUSTOMER_SELECT: &str = "id,org_id,name,email,phone,company,company_name,address,city,state,postal_code,country,tax_number,currency,payment_terms,is_active,notes,created_at,updated_at";
+const GREENBOOKS_INVOICE_SELECT: &str = "id,org_id,invoice_number,contact_id,company_id,issue_date,due_date,status,subtotal,tax_amount,total,amount_paid,balance_due,currency,notes,terms,journal_entry_id,created_by,created_at,updated_at";
+const GREENBOOKS_INVOICE_ITEM_SELECT: &str = "id,invoice_id,item_id,description,quantity,unit_price,amount,account_id,tax_rate,tax_amount,sort_order,created_at";
+const GREENBOOKS_PAYMENT_SELECT: &str = "id,org_id,payment_number,invoice_id,amount,payment_date,payment_method,reference,notes,journal_entry_id,created_at";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GreenbooksAccountDto {
+    id: String,
+    org_id: Option<String>,
+    code: Option<String>,
+    name: Option<String>,
+    account_type: Option<String>,
+    sub_type: Option<String>,
+    parent_id: Option<String>,
+    description: Option<String>,
+    is_active: Option<bool>,
+    is_system: Option<bool>,
+    normal_balance: Option<String>,
+    currency: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    #[serde(flatten)]
+    extras: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GreenbooksCustomerDto {
+    id: String,
+    org_id: Option<String>,
+    name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    company: Option<String>,
+    company_name: Option<String>,
+    address: Option<String>,
+    city: Option<String>,
+    state: Option<String>,
+    postal_code: Option<String>,
+    country: Option<String>,
+    tax_number: Option<String>,
+    currency: Option<String>,
+    payment_terms: Option<i64>,
+    is_active: Option<bool>,
+    notes: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    #[serde(flatten)]
+    extras: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GreenbooksInvoiceItemDto {
+    id: Option<String>,
+    invoice_id: Option<String>,
+    item_id: Option<String>,
+    description: Option<String>,
+    quantity: Option<f64>,
+    unit_price: Option<f64>,
+    amount: Option<f64>,
+    account_id: Option<String>,
+    tax_rate: Option<f64>,
+    tax_amount: Option<f64>,
+    sort_order: Option<i64>,
+    created_at: Option<String>,
+    #[serde(flatten)]
+    extras: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GreenbooksInvoiceDto {
+    id: String,
+    org_id: Option<String>,
+    invoice_number: Option<String>,
+    contact_id: Option<String>,
+    company_id: Option<String>,
+    issue_date: Option<String>,
+    due_date: Option<String>,
+    status: Option<String>,
+    subtotal: Option<f64>,
+    tax_amount: Option<f64>,
+    total: Option<f64>,
+    amount_paid: Option<f64>,
+    balance_due: Option<f64>,
+    currency: Option<String>,
+    notes: Option<String>,
+    terms: Option<String>,
+    journal_entry_id: Option<String>,
+    created_by: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    #[serde(default)]
+    items: Vec<GreenbooksInvoiceItemDto>,
+    #[serde(flatten)]
+    extras: Map<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GreenbooksPaymentDto {
+    id: Option<String>,
+    org_id: Option<String>,
+    payment_number: Option<String>,
+    invoice_id: Option<String>,
+    amount: Option<f64>,
+    payment_date: Option<String>,
+    payment_method: Option<String>,
+    reference: Option<String>,
+    notes: Option<String>,
+    journal_entry_id: Option<String>,
+    created_at: Option<String>,
+    #[serde(flatten)]
+    extras: Map<String, Value>,
+}
+
+fn parse_rows<T: for<'de> Deserialize<'de>>(txt: &str) -> Vec<T> {
+    serde_json::from_str::<Vec<T>>(txt).unwrap_or_default()
+}
+
+fn parse_one<T: for<'de> Deserialize<'de>>(txt: &str) -> Option<T> {
+    parse_rows::<T>(txt).into_iter().next()
+}
 
 fn standard_error_kind(status: StatusCode) -> &'static str {
     match status {
@@ -316,7 +437,7 @@ async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> R
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_ACCOUNT_SELECT);
         qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
         qp.append_pair("order", "code.asc");
         if let Some(t) = account_type {
@@ -332,7 +453,8 @@ async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> R
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                return (status, Body::from(txt)).into_response();
+                let rows: Vec<GreenbooksAccountDto> = parse_rows(&txt);
+                return Json(rows).into_response();
             }
             let msg = supabase_error_message(&txt);
             (
@@ -361,7 +483,7 @@ async fn greenbooks_get_account(Path(id): Path<String>) -> Response {
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_ACCOUNT_SELECT);
         qp.append_pair("id", &format!("eq.{id}"));
         qp.append_pair("limit", "1");
     }
@@ -376,8 +498,7 @@ async fn greenbooks_get_account(Path(id): Path<String>) -> Response {
                 )
                     .into_response();
             }
-            let rows = serde_json::from_str::<Vec<serde_json::Value>>(&txt).unwrap_or_default();
-            if let Some(row) = rows.into_iter().next() {
+            if let Some(row) = parse_one::<GreenbooksAccountDto>(&txt) {
                 return Json(row).into_response();
             }
             (
@@ -425,7 +546,8 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                return (StatusCode::OK, Body::from(txt)).into_response();
+                let rows: Vec<GreenbooksCustomerDto> = parse_rows(&txt);
+                return Json(rows).into_response();
             }
 
             let msg = supabase_error_message(&txt);
@@ -463,7 +585,7 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_CUSTOMER_SELECT);
         qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
         qp.append_pair("order", "name.asc");
         if let Some(v) = active {
@@ -489,7 +611,8 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                return (StatusCode::OK, Body::from(txt)).into_response();
+                let rows: Vec<GreenbooksCustomerDto> = parse_rows(&txt);
+                return Json(rows).into_response();
             }
             let msg = supabase_error_message(&txt);
             if msg.to_ascii_lowercase().contains("relation")
@@ -524,7 +647,7 @@ async fn greenbooks_get_customer(Path(id): Path<String>) -> Response {
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_CUSTOMER_SELECT);
         qp.append_pair("id", &format!("eq.{id}"));
         qp.append_pair("limit", "1");
     }
@@ -539,8 +662,7 @@ async fn greenbooks_get_customer(Path(id): Path<String>) -> Response {
                 )
                     .into_response();
             }
-            let rows = serde_json::from_str::<Vec<serde_json::Value>>(&txt).unwrap_or_default();
-            if let Some(row) = rows.into_iter().next() {
+            if let Some(row) = parse_one::<GreenbooksCustomerDto>(&txt) {
                 return Json(row).into_response();
             }
             (
@@ -585,7 +707,7 @@ async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> R
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_INVOICE_SELECT);
         qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
         qp.append_pair("order", "issue_date.desc");
         if let Some(s) = status_filter {
@@ -603,7 +725,8 @@ async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> R
             let st = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if st.is_success() {
-                return (StatusCode::OK, Body::from(txt)).into_response();
+                let rows: Vec<GreenbooksInvoiceDto> = parse_rows(&txt);
+                return Json(rows).into_response();
             }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -632,7 +755,7 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
     };
     {
         let mut qp = inv_url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_INVOICE_SELECT);
         qp.append_pair("id", &format!("eq.{id}"));
         qp.append_pair("limit", "1");
     }
@@ -656,16 +779,16 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
         )
             .into_response();
     }
-    let mut inv_rows =
-        serde_json::from_str::<Vec<serde_json::Value>>(&inv_text).unwrap_or_default();
-    if inv_rows.is_empty() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Invoice not found" })),
-        )
-            .into_response();
-    }
-    let mut invoice = inv_rows.remove(0);
+    let mut invoice = match parse_one::<GreenbooksInvoiceDto>(&inv_text) {
+        Some(row) => row,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Invoice not found" })),
+            )
+                .into_response();
+        }
+    };
 
     let mut items_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoice_items"))
     {
@@ -674,7 +797,7 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
     };
     {
         let mut qp = items_url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_INVOICE_ITEM_SELECT);
         qp.append_pair("invoice_id", &format!("eq.{id}"));
         qp.append_pair("order", "sort_order.asc");
     }
@@ -697,11 +820,8 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
         )
             .into_response();
     }
-    let items = serde_json::from_str::<serde_json::Value>(&items_text)
-        .unwrap_or_else(|_| serde_json::json!([]));
-    if let Some(obj) = invoice.as_object_mut() {
-        obj.insert("items".to_string(), items);
-    }
+    let items: Vec<GreenbooksInvoiceItemDto> = parse_rows(&items_text);
+    invoice.items = items;
     Json(invoice).into_response()
 }
 
@@ -744,7 +864,7 @@ async fn greenbooks_list_payments(
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_PAYMENT_SELECT);
         qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
         qp.append_pair("order", "payment_date.desc");
         if let Some(limit) = q.limit {
@@ -756,7 +876,8 @@ async fn greenbooks_list_payments(
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                (StatusCode::OK, Body::from(txt)).into_response()
+                let rows: Vec<GreenbooksPaymentDto> = parse_rows(&txt);
+                Json(rows).into_response()
             } else {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -791,7 +912,7 @@ async fn greenbooks_list_invoice_payments(
     };
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_PAYMENT_SELECT);
         qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
         qp.append_pair("invoice_id", &format!("eq.{id}"));
         qp.append_pair("order", "payment_date.desc");
@@ -801,7 +922,8 @@ async fn greenbooks_list_invoice_payments(
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             if status.is_success() {
-                (StatusCode::OK, Body::from(txt)).into_response()
+                let rows: Vec<GreenbooksPaymentDto> = parse_rows(&txt);
+                Json(rows).into_response()
             } else {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -852,7 +974,7 @@ async fn greenbooks_post_invoice_to_gl(
     };
     {
         let mut qp = get_url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_INVOICE_SELECT);
         qp.append_pair("id", &format!("eq.{id}"));
         qp.append_pair("limit", "1");
     }
@@ -975,7 +1097,7 @@ async fn greenbooks_create_invoice_payment(
     };
     {
         let mut qp = inv_url.query_pairs_mut();
-        qp.append_pair("select", "*");
+        qp.append_pair("select", GREENBOOKS_INVOICE_SELECT);
         qp.append_pair("id", &format!("eq.{id}"));
         qp.append_pair("limit", "1");
     }
@@ -4945,6 +5067,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_json(resp).await;
         assert_eq!(body["error"], "Invalid account type: wat");
+    }
+
+    #[test]
+    fn greenbooks_invoice_dto_preserves_dynamic_fields() {
+        let raw = r#"[{"id":"inv_1","status":"sent","custom_metric":42}]"#;
+        let rows: Vec<GreenbooksInvoiceDto> = parse_rows(raw);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "inv_1");
+        assert_eq!(rows[0].status.as_deref(), Some("sent"));
+        assert_eq!(
+            rows[0].extras.get("custom_metric").and_then(|v| v.as_i64()),
+            Some(42)
+        );
     }
 
     #[tokio::test]
