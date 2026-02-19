@@ -1285,9 +1285,11 @@ async fn greenbooks_list_audit(Query(q): Query<HashMap<String, String>>) -> Resp
                     .into_response();
             }
             let msg = supabase_error_message(&txt);
-            if msg.to_ascii_lowercase().contains("relation")
-                && msg.to_ascii_lowercase().contains("gb_audit_trail")
-                && msg.to_ascii_lowercase().contains("does not exist")
+            let lower = msg.to_ascii_lowercase();
+            if lower.contains("gb_audit_trail")
+                && (lower.contains("does not exist")
+                    || lower.contains("could not find the table")
+                    || lower.contains("schema cache"))
             {
                 return Json(serde_json::json!({"entries": [], "total": 0})).into_response();
             }
