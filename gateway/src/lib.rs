@@ -3549,6 +3549,7 @@ async fn module_access_middleware(req: Request, next: axum_mw::Next) -> Result<R
 #[derive(Deserialize)]
 struct SetUserModuleAccessRequest {
     modules: Vec<String>,
+    role: Option<String>,
 }
 
 fn is_admin_principal(principal: &crate::auth::Principal) -> bool {
@@ -3704,12 +3705,26 @@ async fn set_admin_module_access_for_user(
         ));
     }
 
+    if let Some(role) = payload.role.as_deref() {
+        let valid_roles = ["owner", "admin", "member", "user"];
+        if !valid_roles.contains(&role) {
+            return Ok(standard_error_response(
+                StatusCode::BAD_REQUEST,
+                "Invalid role",
+            ));
+        }
+    }
+
     let org_id = principal
         .org_id
         .as_deref()
         .unwrap_or(EXPONENTIAL_ORG_ID)
         .to_string();
     replace_module_access_for_user(&org_id, &user_id, requested.into_iter().collect()).await?;
+
+    if let Some(role) = payload.role {
+        set_user_role(&user_id, &role).await?;
+    }
 
     Ok(Json(serde_json::json!({"ok": true, "user_id": user_id})).into_response())
 }
@@ -3747,6 +3762,37 @@ async fn load_module_access_for_user(org_id: &str, user_id: &str) -> Result<Vec<
                 .map(|s| s.to_string())
         })
         .collect())
+}
+
+async fn set_user_role(user_id: &str, role: &str) -> Result<(), AppError> {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/users"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{user_id}"));
+    }
+
+    let body = serde_json::json!({ "role": role }).to_string();
+    let resp = client
+        .patch(url.as_str())
+        .header("Content-Type", "application/json")
+        .header("Prefer", "return=minimal")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::internal("failed to update user role"));
+    }
+
+    Ok(())
 }
 
 async fn replace_module_access_for_user(
