@@ -3461,9 +3461,7 @@ fn module_key_for_path(path: &str) -> Option<&'static str> {
 async fn load_module_access_for_principal(
     principal: &crate::auth::Principal,
 ) -> Result<Option<std::collections::HashSet<String>>, AppError> {
-    if principal.roles.iter().any(|r| r == "admin" || r == "owner") {
-        return Ok(None); // None = full access
-    }
+    let is_admin_or_owner = principal.roles.iter().any(|r| r == "admin" || r == "owner");
 
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3503,6 +3501,10 @@ async fn load_module_access_for_principal(
     let txt = resp.text().await.unwrap_or_default();
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
     if rows.is_empty() {
+        // compatibility mode: admins/owners without explicit grants keep full access
+        if is_admin_or_owner {
+            return Ok(None);
+        }
         return Ok(None); // no grants configured => full access for now
     }
 
