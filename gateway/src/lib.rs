@@ -5,6 +5,7 @@ pub mod egress;
 pub mod error;
 pub mod middleware;
 pub mod observability;
+pub mod quickbooks_import;
 pub mod rbac;
 pub mod rich_text;
 pub mod tool_router;
@@ -2565,10 +2566,6 @@ placeholder,CSV export not implemented for this report yet
             .into_response();
     }
     Json(payload).into_response()
-}
-
-async fn greenbooks_import_quickbooks(_request: Request) -> Response {
-    (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({"error": "Rust-native QuickBooks ZIP import is not implemented yet","success": false}))).into_response()
 }
 
 async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> Response {
@@ -6265,7 +6262,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/import/quickbooks",
-            axum::routing::post(greenbooks_import_quickbooks),
+            axum::routing::post(crate::quickbooks_import::greenbooks_import_quickbooks),
         )
         .route(
             "/api/greenbooks/accounts/export",
