@@ -485,6 +485,21 @@ async fn proxy_api_path(
     request: Request,
 ) -> Response {
     let query = request.uri().query().unwrap_or("");
+    if query.contains("__gateway_internal=1") {
+        return (
+            StatusCode::LOOP_DETECTED,
+            Json(serde_json::json!({
+                "error": {
+                    "code": 508,
+                    "kind": "proxy_loop_detected",
+                    "message": "gateway detected recursive internal proxy request",
+                    "upstream_path": upstream_path,
+                }
+            })),
+        )
+            .into_response();
+    }
+
     let base = format!("{}{}", state.upstream_base, upstream_path);
     let url = if query.is_empty() {
         format!("{base}?__gateway_internal=1")
@@ -1978,7 +1993,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
 
     let proxy_state = ApiProxyState {
         client: proxy_client.clone(),
-        upstream_base: config.betterauth_base_url.trim_end_matches('/').to_string(),
+        upstream_base: config
+            .proxy_upstream_base_url
+            .trim_end_matches('/')
+            .to_string(),
     };
 
     let mut router = Router::new()

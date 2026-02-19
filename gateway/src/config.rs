@@ -38,6 +38,9 @@ pub struct GatewayConfig {
     pub auth_enabled: bool,
     /// BetterAuth base URL (e.g. `http://localhost:3000` for tools app).
     pub betterauth_base_url: String,
+    /// Upstream API base URL for /api/* proxy routes.
+    /// Keep this separate from BetterAuth to avoid self-referential proxy loops.
+    pub proxy_upstream_base_url: String,
     /// BetterAuth session cookie name.
     pub betterauth_cookie_name: String,
     /// Upstream timeout in milliseconds for BetterAuth validation calls.
@@ -71,6 +74,10 @@ impl GatewayConfig {
             betterauth_base_url: parse_env(
                 "BETTERAUTH_BASE_URL",
                 "http://localhost:3000".to_owned(),
+            ),
+            proxy_upstream_base_url: parse_env(
+                "PROXY_UPSTREAM_BASE_URL",
+                parse_env("BETTERAUTH_BASE_URL", "http://localhost:3000".to_owned()),
             ),
             betterauth_cookie_name: parse_env(
                 "BETTERAUTH_COOKIE_NAME",
