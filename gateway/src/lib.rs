@@ -217,6 +217,434 @@ async fn proxy_greenspot(
     .await
 }
 
+const GREENBOOKS_DEFAULT_ORG_ID: &str = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
+const GREENBOOKS_ACCOUNT_TYPES: &[&str] = &["asset", "liability", "equity", "revenue", "expense"];
+const GREENBOOKS_INVOICE_STATUSES: &[&str] =
+    &["draft", "sent", "partially_paid", "paid", "overdue", "void"];
+
+fn supabase_error_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    v.get("error")
+                        .and_then(|e| e.as_str())
+                        .map(ToOwned::to_owned)
+                })
+        })
+        .unwrap_or_else(|| body.to_string())
+}
+
+async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> Response {
+    let account_type = q.get("type").map(|v| v.trim()).filter(|v| !v.is_empty());
+    if let Some(t) = account_type {
+        if !GREENBOOKS_ACCOUNT_TYPES.contains(&t) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Invalid account type: {t}") })),
+            )
+                .into_response();
+        }
+    }
+
+    let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
+    if let Some(ref v) = active {
+        if v != "true" && v != "false" {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "active must be true or false" })),
+            )
+                .into_response();
+        }
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_accounts")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
+        qp.append_pair("order", "code.asc");
+        if let Some(t) = account_type {
+            qp.append_pair("account_type", &format!("eq.{t}"));
+        }
+        if let Some(v) = active {
+            qp.append_pair("is_active", &format!("eq.{v}"));
+        }
+    }
+
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                return (status, Body::from(txt)).into_response();
+            }
+            let msg = supabase_error_message(&txt);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_get_account(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_accounts")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("limit", "1");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": supabase_error_message(&txt) })),
+                )
+                    .into_response();
+            }
+            let rows = serde_json::from_str::<Vec<serde_json::Value>>(&txt).unwrap_or_default();
+            if let Some(row) = rows.into_iter().next() {
+                return Json(row).into_response();
+            }
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Account not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> Response {
+    let search = q.get("search").map(|v| v.trim()).filter(|v| !v.is_empty());
+    let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
+    if let Some(ref v) = active {
+        if v != "true" && v != "false" {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "active must be true or false" })),
+            )
+                .into_response();
+        }
+    }
+    let limit = q
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|v| v.clamp(1, 500));
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+
+    // Prefer RPC parity from tools implementation.
+    let rpc_url = format!("{base}/rest/v1/rpc/gb_customers_list_with_open_balance");
+    let rpc_body = serde_json::json!({
+        "p_org_id": GREENBOOKS_DEFAULT_ORG_ID,
+        "p_search": search,
+        "p_active": active.as_ref().map(|v| v == "true"),
+        "p_limit": limit,
+    });
+
+    match client.post(&rpc_url).json(&rpc_body).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                return (StatusCode::OK, Body::from(txt)).into_response();
+            }
+
+            let msg = supabase_error_message(&txt);
+            if msg
+                .to_ascii_lowercase()
+                .contains("gb_customers_list_with_open_balance")
+                && msg.to_ascii_lowercase().contains("does not exist")
+            {
+                // Fallback parity: plain table query when RPC is missing.
+            } else if msg.to_ascii_lowercase().contains("relation")
+                && msg.to_ascii_lowercase().contains("gb_customers")
+                && msg.to_ascii_lowercase().contains("does not exist")
+            {
+                return Json(serde_json::json!([])).into_response();
+            } else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": msg })),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    }
+
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_customers")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
+        qp.append_pair("order", "name.asc");
+        if let Some(v) = active {
+            qp.append_pair("is_active", &format!("eq.{v}"));
+        }
+        if let Some(s) = search {
+            let escaped = s.replace(",", "\\,");
+            qp.append_pair(
+                "or",
+                &format!(
+                    "name.ilike.*{0}*,email.ilike.*{0}*,company.ilike.*{0}*,company_name.ilike.*{0}*",
+                    escaped
+                ),
+            );
+        }
+        if let Some(l) = limit {
+            qp.append_pair("limit", &l.to_string());
+        }
+    }
+
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                return (StatusCode::OK, Body::from(txt)).into_response();
+            }
+            let msg = supabase_error_message(&txt);
+            if msg.to_ascii_lowercase().contains("relation")
+                && msg.to_ascii_lowercase().contains("gb_customers")
+                && msg.to_ascii_lowercase().contains("does not exist")
+            {
+                return Json(serde_json::json!([])).into_response();
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_get_customer(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_customers")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("limit", "1");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": supabase_error_message(&txt) })),
+                )
+                    .into_response();
+            }
+            let rows = serde_json::from_str::<Vec<serde_json::Value>>(&txt).unwrap_or_default();
+            if let Some(row) = rows.into_iter().next() {
+                return Json(row).into_response();
+            }
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Customer not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> Response {
+    let status_filter = q.get("status").map(|v| v.trim()).filter(|v| !v.is_empty());
+    if let Some(s) = status_filter {
+        if !GREENBOOKS_INVOICE_STATUSES.contains(&s) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Invalid status: {s}") })),
+            )
+                .into_response();
+        }
+    }
+    let contact_id = q
+        .get("contact_id")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty());
+    let limit = q.get("limit").and_then(|v| v.parse::<i64>().ok());
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{GREENBOOKS_DEFAULT_ORG_ID}"));
+        qp.append_pair("order", "issue_date.desc");
+        if let Some(s) = status_filter {
+            qp.append_pair("status", &format!("eq.{s}"));
+        }
+        if let Some(cid) = contact_id {
+            qp.append_pair("contact_id", &format!("eq.{cid}"));
+        }
+        if let Some(l) = limit {
+            qp.append_pair("limit", &l.to_string());
+        }
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                return (StatusCode::OK, Body::from(txt)).into_response();
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": supabase_error_message(&txt) })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut inv_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    {
+        let mut qp = inv_url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("limit", "1");
+    }
+
+    let inv_resp = match client.get(inv_url.as_str()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let inv_status = inv_resp.status();
+    let inv_text = inv_resp.text().await.unwrap_or_default();
+    if !inv_status.is_success() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": supabase_error_message(&inv_text) })),
+        )
+            .into_response();
+    }
+    let mut inv_rows =
+        serde_json::from_str::<Vec<serde_json::Value>>(&inv_text).unwrap_or_default();
+    if inv_rows.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Invoice not found" })),
+        )
+            .into_response();
+    }
+    let mut invoice = inv_rows.remove(0);
+
+    let mut items_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoice_items")).unwrap();
+    {
+        let mut qp = items_url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("invoice_id", &format!("eq.{id}"));
+        qp.append_pair("order", "sort_order.asc");
+    }
+    let items_resp = match client.get(items_url.as_str()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+    let items_status = items_resp.status();
+    let items_text = items_resp.text().await.unwrap_or_default();
+    if !items_status.is_success() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": supabase_error_message(&items_text) })),
+        )
+            .into_response();
+    }
+    let items = serde_json::from_str::<serde_json::Value>(&items_text)
+        .unwrap_or_else(|_| serde_json::json!([]));
+    if let Some(obj) = invoice.as_object_mut() {
+        obj.insert("items".to_string(), items);
+    }
+    Json(invoice).into_response()
+}
+
 async fn proxy_users(
     State(state): State<ApiProxyState>,
     headers: axum::http::HeaderMap,
@@ -261,7 +689,10 @@ fn supabase_client_with_key(key: &str) -> reqwest::Client {
     let mut default_headers = reqwest::header::HeaderMap::new();
     if let Ok(v) = reqwest::header::HeaderValue::from_str(key) {
         default_headers.insert("apikey", v.clone());
-        default_headers.insert(reqwest::header::AUTHORIZATION, reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).unwrap_or(v));
+        default_headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {key}")).unwrap_or(v),
+        );
     }
     reqwest::Client::builder()
         .default_headers(default_headers)
@@ -273,9 +704,16 @@ async fn get_exponential_labels(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
 ) -> Response {
     if principal.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
     {
@@ -291,10 +729,15 @@ async fn get_exponential_labels(
             if !status.is_success() {
                 return (status, Body::from(body)).into_response();
             }
-            let labels: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            let labels: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
             Json(serde_json::json!({"labels": labels})).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -303,34 +746,95 @@ async fn create_exponential_label(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid body: {e}")}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
     };
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Invalid JSON"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
     };
-    let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let color = parsed.get("color").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if name.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label name is required"}))).into_response(); }
-    if color.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label color is required"}))).into_response(); }
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let color = parsed
+        .get("color")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Label name is required"})),
+        )
+            .into_response();
+    }
+    if color.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Label color is required"})),
+        )
+            .into_response();
+    }
     let client = supabase_client_with_key(&key);
     let url = format!("{base}/rest/v1/labels");
     let payload = serde_json::json!([{"org_id": EXPONENTIAL_ORG_ID, "name": name, "color": color}]);
-    match client.post(url).header("Prefer", "return=representation").json(&payload).send().await {
+    match client
+        .post(url)
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+    {
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            if !status.is_success() { return (status, Body::from(body)).into_response(); }
-            let rows: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
-            let label = rows.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
-            (StatusCode::CREATED, Json(serde_json::json!({"label": label}))).into_response()
+            if !status.is_success() {
+                return (status, Body::from(body)).into_response();
+            }
+            let rows: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            let label = rows
+                .as_array()
+                .and_then(|a| a.first())
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"label": label})),
+            )
+                .into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -339,27 +843,65 @@ async fn delete_exponential_label(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     if principal.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
     }
-    let id = match q.get("id") { Some(v) if !v.is_empty() => v.clone(), _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Label id is required"}))).into_response() };
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let id = match q.get("id") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Label id is required"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
     url.query_pairs_mut().append_pair("id", &format!("eq.{id}"));
     match client.delete(url.as_str()).send().await {
         Ok(resp) => {
-            if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+            if !resp.status().is_success() {
+                return (
+                    resp.status(),
+                    Body::from(resp.text().await.unwrap_or_default()),
+                )
+                    .into_response();
+            }
             Json(serde_json::json!({"success": true})).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
 async fn get_exponential_views(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
 ) -> Response {
-    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let user_id = match principal {
+        Some(axum::extract::Extension(p)) => p.user_id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Unauthorized"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
     {
@@ -373,11 +915,18 @@ async fn get_exponential_views(
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            if !status.is_success() { return (status, Body::from(body)).into_response(); }
-            let views: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            if !status.is_success() {
+                return (status, Body::from(body)).into_response();
+            }
+            let views: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
             Json(serde_json::json!({"views": views})).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -385,12 +934,53 @@ async fn create_exponential_view(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     request: Request,
 ) -> Response {
-    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
-    let body = match to_bytes(request.into_body(), 1024 * 1024).await { Ok(b) => b, Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid body: {e}")}))).into_response() };
-    let parsed: serde_json::Value = match serde_json::from_slice(&body) { Ok(v) => v, Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Invalid JSON"}))).into_response() };
-    let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    if name.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"name is required"}))).into_response(); }
+    let user_id = match principal {
+        Some(axum::extract::Extension(p)) => p.user_id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Unauthorized"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
+    };
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"name is required"})),
+        )
+            .into_response();
+    }
     let payload = serde_json::json!([{
         "org_id": EXPONENTIAL_ORG_ID,
         "user_id": user_id,
@@ -401,10 +991,14 @@ async fn create_exponential_view(
     }]);
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
-    url.query_pairs_mut().append_pair("on_conflict", "org_id,user_id,name");
+    url.query_pairs_mut()
+        .append_pair("on_conflict", "org_id,user_id,name");
     match client
         .post(url.as_str())
-        .header("Prefer", "resolution=merge-duplicates,return=representation")
+        .header(
+            "Prefer",
+            "resolution=merge-duplicates,return=representation",
+        )
         .json(&payload)
         .send()
         .await
@@ -412,12 +1006,23 @@ async fn create_exponential_view(
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            if !status.is_success() { return (status, Body::from(body)).into_response(); }
-            let rows: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
-            let view = rows.as_array().and_then(|a| a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
+            if !status.is_success() {
+                return (status, Body::from(body)).into_response();
+            }
+            let rows: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!([]));
+            let view = rows
+                .as_array()
+                .and_then(|a| a.first())
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
             (StatusCode::CREATED, Json(serde_json::json!({"view": view}))).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -425,8 +1030,20 @@ async fn delete_exponential_view(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(view_id): Path<String>,
 ) -> Response {
-    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let user_id = match principal {
+        Some(axum::extract::Extension(p)) => p.user_id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Unauthorized"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
     {
@@ -436,10 +1053,20 @@ async fn delete_exponential_view(
     }
     match client.delete(url.as_str()).send().await {
         Ok(resp) => {
-            if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+            if !resp.status().is_success() {
+                return (
+                    resp.status(),
+                    Body::from(resp.text().await.unwrap_or_default()),
+                )
+                    .into_response();
+            }
             Json(serde_json::json!({"success": true})).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -448,14 +1075,24 @@ async fn get_exponential_project_assignees(
     Path(project_id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return r };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let client = supabase_client_with_key(&key);
     let mut url = url::Url::parse(&format!("{base}/rest/v1/project_assignees_view")).unwrap();
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("select", "user_id,first_name,last_name,email,avatar_url,project_role,display_name");
+        qp.append_pair(
+            "select",
+            "user_id,first_name,last_name,email,avatar_url,project_role,display_name",
+        );
         qp.append_pair("project_id", &format!("eq.{project_id}"));
         qp.append_pair("order", "display_name.asc");
     }
@@ -463,17 +1100,29 @@ async fn get_exponential_project_assignees(
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            if !status.is_success() { return (status, Body::from(body)).into_response(); }
+            if !status.is_success() {
+                return (status, Body::from(body)).into_response();
+            }
             let rows: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap_or_default();
             let mut seen = std::collections::HashSet::new();
             let mut dedup = Vec::new();
             for row in rows {
-                let uid = row.get("user_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                if !uid.is_empty() && seen.insert(uid) { dedup.push(row); }
+                let uid = row
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !uid.is_empty() && seen.insert(uid) {
+                    dedup.push(row);
+                }
             }
             Json(serde_json::json!({"assignees": dedup, "count": dedup.len()})).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
@@ -637,7 +1286,10 @@ async fn egress_proxy_api_path(
     let canonical_request_id = request_id_from_extension(request_id);
 
     let mut upstream_headers = axum::http::HeaderMap::new();
-    upstream_headers.insert(header::USER_AGENT, HeaderValue::from_static("lua-resty-http"));
+    upstream_headers.insert(
+        header::USER_AGENT,
+        HeaderValue::from_static("lua-resty-http"),
+    );
     if let Ok(value) = HeaderValue::from_str(&canonical_request_id) {
         upstream_headers.insert(HeaderName::from_static(X_REQUEST_ID), value);
     }
@@ -664,8 +1316,7 @@ async fn egress_proxy_api_path(
             let upstream_headers = upstream.headers;
 
             let mut resp = Response::new(Body::from(upstream.body));
-            *resp.status_mut() =
-                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+            *resp.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
 
             for h in [
                 header::CONTENT_TYPE,
@@ -959,14 +1610,25 @@ async fn list_exponential_tasks(
     Query(query): Query<ListTasksQuery>,
 ) -> Result<Response, AppError> {
     if cfg!(test) {
-        return Ok(Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null})).into_response());
+        return Ok(
+            Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null}))
+                .into_response(),
+        );
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let view = query.view.as_deref();
     let task_select = match view {
         Some("nav") => "id,project_id,title,position,milestone,archived_at",
@@ -977,23 +1639,47 @@ async fn list_exponential_tasks(
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", task_select);
         qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
-        if query.include_archived.unwrap_or(false) == false { qp.append_pair("archived_at", "is.null"); }
-        if let Some(v) = query.project_id { qp.append_pair("project_id", &format!("eq.{v}")); }
-        if let Some(v) = query.assignee_id { qp.append_pair("assignee_id", &format!("eq.{v}")); }
-        if let Some(v) = query.status { qp.append_pair("status", &format!("eq.{v}")); }
-        if let Some(v) = query.sprint_id { qp.append_pair("sprint_id", &format!("eq.{v}")); }
-        if let Some(v) = query.team_id { qp.append_pair("team_id", &format!("eq.{v}")); }
-        if let Some(v) = query.search { qp.append_pair("or", &format!("title.ilike.*{v}*,identifier.ilike.*{v}*")); }
+        if query.include_archived.unwrap_or(false) == false {
+            qp.append_pair("archived_at", "is.null");
+        }
+        if let Some(v) = query.project_id {
+            qp.append_pair("project_id", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.assignee_id {
+            qp.append_pair("assignee_id", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.status {
+            qp.append_pair("status", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.sprint_id {
+            qp.append_pair("sprint_id", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.team_id {
+            qp.append_pair("team_id", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.search {
+            qp.append_pair("or", &format!("title.ilike.*{v}*,identifier.ilike.*{v}*"));
+        }
         qp.append_pair("order", "updated_at.desc");
         qp.append_pair("order", "id.desc");
         qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
     }
-    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let status = resp.status();
     let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
-    let tasks: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
-    Ok(Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null})).into_response())
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    let tasks: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(
+        Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null}))
+            .into_response(),
+    )
 }
 
 async fn create_exponential_task(
@@ -1004,14 +1690,42 @@ async fn create_exponential_task(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
     let body = body.as_object().cloned().unwrap_or_default();
-    let project_id = body.get("project_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    if project_id.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"project_id is required"}))).into_response()); }
-    if title.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Task title is required"}))).into_response()); }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let project_id = body
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let title = body
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if project_id.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"project_id is required"})),
+        )
+            .into_response());
+    }
+    if title.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Task title is required"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
     let payload = serde_json::json!([{
       "org_id": EXPONENTIAL_ORG_ID,
@@ -1027,11 +1741,23 @@ async fn create_exponential_task(
       "milestone": body.get("milestone").cloned().unwrap_or(serde_json::Value::Null),
       "position": body.get("position").cloned().unwrap_or(serde_json::json!(1000))
     }]);
-    let resp = client.post(format!("{base}/rest/v1/tasks")).header("Prefer", "return=representation").json(&payload).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let resp = client
+        .post(format!("{base}/rest/v1/tasks"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
-    let task = rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    let task = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     Ok((StatusCode::CREATED, Json(serde_json::json!({"task": task}))).into_response())
 }
 
@@ -1058,17 +1784,46 @@ async fn get_exponential_task(
         return Ok(Json(serde_json::Value::Object(payload)).into_response());
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp = url.query_pairs_mut(); qp.append_pair("select", "*"); qp.append_pair("id", &format!("eq.{task_id}")); qp.append_pair("limit", "1"); }
-    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{task_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
-    let task = match rows.first() { Some(v) => v.clone(), None => return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Task not found"}))).into_response()) };
+    let task = match rows.first() {
+        Some(v) => v.clone(),
+        None => {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error":"Task not found"})),
+            )
+                .into_response())
+        }
+    };
 
     let mut payload = serde_json::Map::new();
     payload.insert("task".into(), task);
@@ -1090,12 +1845,31 @@ async fn update_exponential_task(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
     let mut updates = serde_json::Map::new();
-    for f in ["title","description","status","priority","assignee_id","sprint_id","due_at","labels","milestone","position","project_id"] {
+    for f in [
+        "title",
+        "description",
+        "status",
+        "priority",
+        "assignee_id",
+        "sprint_id",
+        "due_at",
+        "labels",
+        "milestone",
+        "position",
+        "project_id",
+    ] {
         if let Some(v) = body.get(f) {
             if f == "description" {
                 updates.insert(f.to_string(), sanitize_description_value(v));
@@ -1105,17 +1879,41 @@ async fn update_exponential_task(
         }
     }
     if let Some(action) = body.get("action").and_then(|v| v.as_str()) {
-        if action == "archive" { updates.insert("archived_at".into(), serde_json::json!("now")); }
-        if action == "unarchive" { updates.insert("archived_at".into(), serde_json::Value::Null); }
+        if action == "archive" {
+            updates.insert("archived_at".into(), serde_json::json!("now"));
+        }
+        if action == "unarchive" {
+            updates.insert("archived_at".into(), serde_json::Value::Null);
+        }
     }
-    if updates.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"No fields to update"}))).into_response()); }
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
-    url.query_pairs_mut().append_pair("id", &format!("eq.{task_id}"));
-    let resp = client.patch(url.as_str()).header("Prefer", "return=representation").json(&serde_json::Value::Object(updates)).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status = resp.status(); let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
+    if updates.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"No fields to update"})),
+        )
+            .into_response());
+    }
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("id", &format!("eq.{task_id}"));
+    let resp = client
+        .patch(url.as_str())
+        .header("Prefer", "return=representation")
+        .json(&serde_json::Value::Object(updates))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
-    let task = rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    let task = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     Ok(Json(serde_json::json!({"task": task})).into_response())
 }
 
@@ -1127,14 +1925,33 @@ async fn delete_exponential_task(
     Path(task_id): Path<String>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
-    url.query_pairs_mut().append_pair("id", &format!("eq.{task_id}"));
-    let resp = client.delete(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    if !resp.status().is_success() { return Ok((resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response()); }
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("id", &format!("eq.{task_id}"));
+    let resp = client
+        .delete(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Ok((
+            resp.status(),
+            Body::from(resp.text().await.unwrap_or_default()),
+        )
+            .into_response());
+    }
     Ok(Json(serde_json::json!({"success": true})).into_response())
 }
 
@@ -1149,23 +1966,43 @@ async fn list_exponential_sprints(
         return Ok(Json(serde_json::json!({"sprints": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/sprints"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     {
-      let mut qp=url.query_pairs_mut();
-      qp.append_pair("select","*");
-      qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
-      if let Some(v)=query.project_id { qp.append_pair("project_id", &format!("eq.{v}")); }
-      if let Some(v)=query.state { qp.append_pair("state", &format!("eq.{v}")); }
-      qp.append_pair("order","number.asc");
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        if let Some(v) = query.project_id {
+            qp.append_pair("project_id", &format!("eq.{v}"));
+        }
+        if let Some(v) = query.state {
+            qp.append_pair("state", &format!("eq.{v}"));
+        }
+        qp.append_pair("order", "number.asc");
     }
-    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
-    let sprints: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    let sprints: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
     Ok(Json(serde_json::json!({"sprints": sprints})).into_response())
 }
 
@@ -1177,18 +2014,53 @@ async fn create_exponential_sprint(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let project_id = body.get("project_id").or_else(|| body.get("projectId")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if project_id.is_empty() { return Ok((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"project_id is required"}))).into_response()); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut q=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=q.query_pairs_mut(); qp.append_pair("select","number"); qp.append_pair("project_id", &format!("eq.{project_id}")); qp.append_pair("order","number.desc"); qp.append_pair("limit","1"); }
-    let r=client.get(q.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&r.text().await.unwrap_or_default()).unwrap_or_default();
-    let next_num = rows.first().and_then(|v| v.get("number")).and_then(|v| v.as_i64()).unwrap_or(0)+1;
-    let payload=serde_json::json!([{
+    let project_id = body
+        .get("project_id")
+        .or_else(|| body.get("projectId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if project_id.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"project_id is required"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut q = url::Url::parse(&format!("{base}/rest/v1/sprints"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = q.query_pairs_mut();
+        qp.append_pair("select", "number");
+        qp.append_pair("project_id", &format!("eq.{project_id}"));
+        qp.append_pair("order", "number.desc");
+        qp.append_pair("limit", "1");
+    }
+    let r = client
+        .get(q.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&r.text().await.unwrap_or_default()).unwrap_or_default();
+    let next_num = rows
+        .first()
+        .and_then(|v| v.get("number"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+        + 1;
+    let payload = serde_json::json!([{
       "project_id": project_id,
       "org_id": EXPONENTIAL_ORG_ID,
       "name": body.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| format!("Sprint {}", next_num)),
@@ -1197,12 +2069,28 @@ async fn create_exponential_sprint(
       "end_date": body.get("end_date").cloned().unwrap_or(serde_json::Value::Null),
       "state": body.get("state").cloned().unwrap_or(serde_json::json!("planned"))
     }]);
-    let resp=client.post(format!("{base}/rest/v1/sprints")).header("Prefer","return=representation").json(&payload).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
+    let resp = client
+        .post(format!("{base}/rest/v1/sprints"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
-    let sprint=rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
-    Ok((StatusCode::CREATED, Json(serde_json::json!({"sprint": sprint}))).into_response())
+    let sprint = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({"sprint": sprint})),
+    )
+        .into_response())
 }
 
 async fn get_exponential_sprint(
@@ -1213,27 +2101,69 @@ async fn get_exponential_sprint(
     Path(sprint_id): Path<String>,
 ) -> Result<Response, AppError> {
     if cfg!(test) {
-        return Ok(Json(serde_json::json!({"sprint": {"id": sprint_id}, "tasks": []})).into_response());
+        return Ok(
+            Json(serde_json::json!({"sprint": {"id": sprint_id}, "tasks": []})).into_response(),
+        );
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut u=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=u.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{sprint_id}")); qp.append_pair("limit","1"); }
-    let resp=client.get(u.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let status=resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !status.is_success(){ return Ok((status, Body::from(txt)).into_response()); }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut u = url::Url::parse(&format!("{base}/rest/v1/sprints"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = u.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{sprint_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let resp = client
+        .get(u.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
     let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
-    let sprint = match rows.first(){Some(v)=>v.clone(),None=>return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Sprint not found"}))).into_response())};
-    let mut tu=url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=tu.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("sprint_id", &format!("eq.{sprint_id}")); qp.append_pair("archived_at","is.null"); qp.append_pair("order","position.asc"); }
-    let tr=client.get(tu.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let tasks: serde_json::Value = serde_json::from_str(&tr.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    let sprint = match rows.first() {
+        Some(v) => v.clone(),
+        None => {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error":"Sprint not found"})),
+            )
+                .into_response())
+        }
+    };
+    let mut tu = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = tu.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("sprint_id", &format!("eq.{sprint_id}"));
+        qp.append_pair("archived_at", "is.null");
+        qp.append_pair("order", "position.asc");
+    }
+    let tr = client
+        .get(tu.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let tasks: serde_json::Value = serde_json::from_str(&tr.text().await.unwrap_or_default())
+        .unwrap_or_else(|_| serde_json::json!([]));
     Ok(Json(serde_json::json!({"sprint": sprint, "tasks": tasks})).into_response())
 }
-
 
 async fn update_exponential_sprint(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
@@ -1241,19 +2171,62 @@ async fn update_exponential_sprint(
     Json(body): Json<Value>,
 ) -> Response {
     if principal.is_none() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
     }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
-    let client=supabase_client_with_key(&key);
-    let mut updates=serde_json::Map::new();
-    for f in ["name","start_date","end_date","state"] { if let Some(v)=body.get(f) { updates.insert(f.to_string(), v.clone()); }}
-    if updates.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"No fields to update"}))).into_response(); }
-    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
-    url.query_pairs_mut().append_pair("id", &format!("eq.{sprint_id}"));
-    let resp = match client.patch(url.as_str()).header("Prefer","return=representation").json(&serde_json::Value::Object(updates)).send().await { Ok(r)=>r, Err(e)=>return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
-    if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
-    let rows: Vec<serde_json::Value> = serde_json::from_str(&resp.text().await.unwrap_or_default()).unwrap_or_default();
-    let sprint=rows.first().cloned().unwrap_or_else(|| serde_json::json!({}));
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut updates = serde_json::Map::new();
+    for f in ["name", "start_date", "end_date", "state"] {
+        if let Some(v) = body.get(f) {
+            updates.insert(f.to_string(), v.clone());
+        }
+    }
+    if updates.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"No fields to update"})),
+        )
+            .into_response();
+    }
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    url.query_pairs_mut()
+        .append_pair("id", &format!("eq.{sprint_id}"));
+    let resp = match client
+        .patch(url.as_str())
+        .header("Prefer", "return=representation")
+        .json(&serde_json::Value::Object(updates))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error":e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    if !resp.status().is_success() {
+        return (
+            resp.status(),
+            Body::from(resp.text().await.unwrap_or_default()),
+        )
+            .into_response();
+    }
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&resp.text().await.unwrap_or_default()).unwrap_or_default();
+    let sprint = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     Json(serde_json::json!({"sprint": sprint})).into_response()
 }
 
@@ -1261,13 +2234,38 @@ async fn delete_exponential_sprint(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(sprint_id): Path<String>,
 ) -> Response {
-    if principal.is_none() { return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response(); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
-    let client=supabase_client_with_key(&key);
-    let mut url=url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
-    url.query_pairs_mut().append_pair("id", &format!("eq.{sprint_id}"));
-    let resp = match client.delete(url.as_str()).send().await { Ok(r)=>r, Err(e)=>return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
-    if !resp.status().is_success() { return (resp.status(), Body::from(resp.text().await.unwrap_or_default())).into_response(); }
+    if principal.is_none() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response();
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    url.query_pairs_mut()
+        .append_pair("id", &format!("eq.{sprint_id}"));
+    let resp = match client.delete(url.as_str()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error":e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    if !resp.status().is_success() {
+        return (
+            resp.status(),
+            Body::from(resp.text().await.unwrap_or_default()),
+        )
+            .into_response();
+    }
     Json(serde_json::json!({"success": true})).into_response()
 }
 async fn list_exponential_projects(
@@ -1277,11 +2275,23 @@ async fn list_exponential_projects(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Query(query): Query<ListProjectsQuery>,
 ) -> Result<Response, AppError> {
-    if cfg!(test) { return Ok(Json(serde_json::json!({"projects": []})).into_response()); }
-    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut url=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"projects": []})).into_response());
+    }
+    if principal.is_none() {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/projects"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let view = query.view.as_deref();
     let is_sidebar_view = matches!(view, Some("sidebar"));
     let project_select = if is_sidebar_view {
@@ -1290,16 +2300,27 @@ async fn list_exponential_projects(
         "*,team:teams(id,name,slug,color)"
     };
     {
-      let mut qp=url.query_pairs_mut();
-      qp.append_pair("select", project_select);
-      qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
-      qp.append_pair("order","name.asc");
-      if query.include_archived.unwrap_or(false)==false { qp.append_pair("archived_at","is.null"); }
-      if let Some(tid)=query.team_id { qp.append_pair("team_id", &format!("eq.{tid}")); }
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", project_select);
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        qp.append_pair("order", "name.asc");
+        if query.include_archived.unwrap_or(false) == false {
+            qp.append_pair("archived_at", "is.null");
+        }
+        if let Some(tid) = query.team_id {
+            qp.append_pair("team_id", &format!("eq.{tid}"));
+        }
     }
-    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let st = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !st.is_success() {
+        return Ok((st, Body::from(txt)).into_response());
+    }
     let mut projects: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
 
     if !is_sidebar_view {
@@ -1309,7 +2330,10 @@ async fn list_exponential_projects(
                 .get("content-range")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("*/0");
-            raw.rsplit('/').next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(0)
+            raw.rsplit('/')
+                .next()
+                .and_then(|n| n.parse::<i64>().ok())
+                .unwrap_or(0)
         };
 
         for p in &mut projects {
@@ -1355,7 +2379,10 @@ async fn list_exponential_projects(
 
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("task_count".to_string(), serde_json::json!(task_count));
-                obj.insert("completed_count".to_string(), serde_json::json!(completed_count));
+                obj.insert(
+                    "completed_count".to_string(),
+                    serde_json::json!(completed_count),
+                );
             }
         }
     }
@@ -1384,25 +2411,105 @@ async fn get_exponential_project(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(project_id): Path<String>,
 ) -> Result<Response, AppError> {
-    if cfg!(test) { return Ok(Json(serde_json::json!({"project":{"id":project_id},"tasks":[],"sprints":[],"members":[],"user_role":"lead","permissions":{"can_manage":true,"can_create_tasks":true,"can_edit_tasks":true,"can_manage_members":true}})).into_response()); }
-    let principal = match principal { Some(axum::extract::Extension(p)) => p, None => return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()) };
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut purl=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*,team:teams(id,name,slug,color)"); qp.append_pair("id", &format!("eq.{project_id}")); qp.append_pair("limit","1"); }
-    let pr=client.get(purl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    if !pr.status().is_success(){ return Ok((pr.status(), Body::from(pr.text().await.unwrap_or_default())).into_response()); }
-    let prow: Vec<serde_json::Value> = serde_json::from_str(&pr.text().await.unwrap_or_default()).unwrap_or_default();
-    if prow.is_empty(){ return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Project not found"}))).into_response()); }
-    let project=prow[0].clone();
-    let mut surl=url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=surl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("project_id", &format!("eq.{project_id}")); qp.append_pair("order","number.asc"); }
-    let sprints: serde_json::Value = serde_json::from_str(&client.get(surl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
-    let mut murl=url::Url::parse(&format!("{base}/rest/v1/project_members")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=murl.query_pairs_mut(); qp.append_pair("select","*,user:users(id,first_name,last_name,email,avatar_url)"); qp.append_pair("project_id", &format!("eq.{project_id}")); }
-    let members: serde_json::Value = serde_json::from_str(&client.get(murl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
-    let mut role="viewer".to_string(); if let Some(arr)=members.as_array(){ for m in arr { if m.get("user_id").and_then(|v|v.as_str())==Some(principal.user_id.as_str()){ role=m.get("role").and_then(|v|v.as_str()).unwrap_or("viewer").to_string(); break; }}}
-    let can_manage=role=="lead"; let can_contrib=role=="lead"||role=="contributor";
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"project":{"id":project_id},"tasks":[],"sprints":[],"members":[],"user_role":"lead","permissions":{"can_manage":true,"can_create_tasks":true,"can_edit_tasks":true,"can_manage_members":true}})).into_response());
+    }
+    let principal = match principal {
+        Some(axum::extract::Extension(p)) => p,
+        None => {
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Unauthorized"})),
+            )
+                .into_response())
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = purl.query_pairs_mut();
+        qp.append_pair("select", "*,team:teams(id,name,slug,color)");
+        qp.append_pair("id", &format!("eq.{project_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let pr = client
+        .get(purl.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !pr.status().is_success() {
+        return Ok((pr.status(), Body::from(pr.text().await.unwrap_or_default())).into_response());
+    }
+    let prow: Vec<serde_json::Value> =
+        serde_json::from_str(&pr.text().await.unwrap_or_default()).unwrap_or_default();
+    if prow.is_empty() {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"Project not found"})),
+        )
+            .into_response());
+    }
+    let project = prow[0].clone();
+    let mut surl = url::Url::parse(&format!("{base}/rest/v1/sprints"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = surl.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("project_id", &format!("eq.{project_id}"));
+        qp.append_pair("order", "number.asc");
+    }
+    let sprints: serde_json::Value = serde_json::from_str(
+        &client
+            .get(surl.as_str())
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .text()
+            .await
+            .unwrap_or_default(),
+    )
+    .unwrap_or_else(|_| serde_json::json!([]));
+    let mut murl = url::Url::parse(&format!("{base}/rest/v1/project_members"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = murl.query_pairs_mut();
+        qp.append_pair(
+            "select",
+            "*,user:users(id,first_name,last_name,email,avatar_url)",
+        );
+        qp.append_pair("project_id", &format!("eq.{project_id}"));
+    }
+    let members: serde_json::Value = serde_json::from_str(
+        &client
+            .get(murl.as_str())
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .text()
+            .await
+            .unwrap_or_default(),
+    )
+    .unwrap_or_else(|_| serde_json::json!([]));
+    let mut role = "viewer".to_string();
+    if let Some(arr) = members.as_array() {
+        for m in arr {
+            if m.get("user_id").and_then(|v| v.as_str()) == Some(principal.user_id.as_str()) {
+                role = m
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("viewer")
+                    .to_string();
+                break;
+            }
+        }
+    }
+    let can_manage = role == "lead";
+    let can_contrib = role == "lead" || role == "contributor";
     Ok(Json(serde_json::json!({"project":project,"tasks":[],"sprints":sprints,"members":members,"user_role":role,"permissions":{"can_manage":can_manage,"can_create_tasks":can_contrib,"can_edit_tasks":can_contrib,"can_manage_members":can_manage}})).into_response())
 }
 
@@ -1413,21 +2520,46 @@ async fn list_exponential_teams(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Query(query): Query<ListTeamsQuery>,
 ) -> Result<Response, AppError> {
-    if cfg!(test) { return Ok(Json(serde_json::json!({"teams": []})).into_response()); }
-    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut url=url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| AppError::internal(e.to_string()))?;
+    if cfg!(test) {
+        return Ok(Json(serde_json::json!({"teams": []})).into_response());
+    }
+    if principal.is_none() {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/teams"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let team_select = if matches!(query.view.as_deref(), Some("sidebar")) {
         "id,name,slug,color"
     } else {
         "*"
     };
-    { let mut qp=url.query_pairs_mut(); qp.append_pair("select", team_select); qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}")); qp.append_pair("order","name.asc"); }
-    let resp=client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    let st=resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !st.is_success(){ return Ok((st, Body::from(txt)).into_response()); }
-    let teams: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", team_select);
+        qp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+        qp.append_pair("order", "name.asc");
+    }
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let st = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !st.is_success() {
+        return Ok((st, Body::from(txt)).into_response());
+    }
+    let teams: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
     Ok(Json(serde_json::json!({"teams": teams})).into_response())
 }
 
@@ -1438,20 +2570,69 @@ async fn get_exponential_team(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(team_id): Path<String>,
 ) -> Result<Response, AppError> {
-    if cfg!(test) { return Ok(Json(serde_json::json!({"teams":[{"id":team_id}],"team":{"id":team_id},"projects": []})).into_response()); }
-    if principal.is_none() { return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response()); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return Ok(r)};
-    let client=supabase_client_with_key(&key);
-    let mut turl=url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{team_id}")); qp.append_pair("limit","1"); }
-    let tr=client.get(turl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    if !tr.status().is_success(){ return Ok((tr.status(), Body::from(tr.text().await.unwrap_or_default())).into_response()); }
-    let trows: Vec<serde_json::Value> = serde_json::from_str(&tr.text().await.unwrap_or_default()).unwrap_or_default();
-    if trows.is_empty(){ return Ok((StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"Team not found"}))).into_response()); }
-    let team=trows[0].clone();
-    let mut purl=url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("team_id", &format!("eq.{team_id}")); qp.append_pair("order","name.asc"); }
-    let projects: serde_json::Value = serde_json::from_str(&client.get(purl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+    if cfg!(test) {
+        return Ok(Json(
+            serde_json::json!({"teams":[{"id":team_id}],"team":{"id":team_id},"projects": []}),
+        )
+        .into_response());
+    }
+    if principal.is_none() {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut turl = url::Url::parse(&format!("{base}/rest/v1/teams"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = turl.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("id", &format!("eq.{team_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let tr = client
+        .get(turl.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !tr.status().is_success() {
+        return Ok((tr.status(), Body::from(tr.text().await.unwrap_or_default())).into_response());
+    }
+    let trows: Vec<serde_json::Value> =
+        serde_json::from_str(&tr.text().await.unwrap_or_default()).unwrap_or_default();
+    if trows.is_empty() {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"Team not found"})),
+        )
+            .into_response());
+    }
+    let team = trows[0].clone();
+    let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = purl.query_pairs_mut();
+        qp.append_pair("select", "*");
+        qp.append_pair("team_id", &format!("eq.{team_id}"));
+        qp.append_pair("order", "name.asc");
+    }
+    let projects: serde_json::Value = serde_json::from_str(
+        &client
+            .get(purl.as_str())
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .text()
+            .await
+            .unwrap_or_default(),
+    )
+    .unwrap_or_else(|_| serde_json::json!([]));
     Ok(Json(serde_json::json!({"team": team, "projects": projects})).into_response())
 }
 
@@ -1464,29 +2645,52 @@ async fn get_exponential_project_tasks(
     Query(query): Query<ProjectTasksQuery>,
 ) -> Result<Response, AppError> {
     if cfg!(test) {
-        return Ok(Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null})).into_response());
+        return Ok(
+            Json(serde_json::json!({"tasks": [], "nextCursor": serde_json::Value::Null}))
+                .into_response(),
+        );
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view")).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/tasks_view"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "id,project_id,org_id,identifier,title,status,priority,assignee_id,sprint_id,sprint_name,due_at,labels,milestone,position,created_at,updated_at");
         qp.append_pair("project_id", &format!("eq.{project_id}"));
-        if query.include_archived.unwrap_or(false) == false { qp.append_pair("archived_at", "is.null"); }
+        if query.include_archived.unwrap_or(false) == false {
+            qp.append_pair("archived_at", "is.null");
+        }
         qp.append_pair("order", "updated_at.desc");
         qp.append_pair("order", "id.desc");
         qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
     }
-    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let status = resp.status();
     let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
-    let tasks: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
-    Ok(Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null})).into_response())
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    let tasks: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    Ok(
+        Json(serde_json::json!({"tasks": tasks, "nextCursor": serde_json::Value::Null}))
+            .into_response(),
+    )
 }
 
 async fn get_exponential_project_members(
@@ -1556,18 +2760,48 @@ async fn get_exponential_task_comments(
         return Ok(Json(serde_json::json!({"comments": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response());
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error":"Unauthorized"})),
+        )
+            .into_response());
     }
-    let (base, key) = match supabase_env() { Ok(v) => v, Err(r) => return Ok(r) };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
     let client = supabase_client_with_key(&key);
-    let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks")).map_err(|e| AppError::internal(e.to_string()))?;
-    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","org_id"); qp.append_pair("id", &format!("eq.{task_id}")); qp.append_pair("limit","1"); }
-    let tresp = client.get(turl.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
-    if !tresp.status().is_success() { return Ok((tresp.status(), Body::from(tresp.text().await.unwrap_or_default())).into_response()); }
-    let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
-    let org_id = trows.first().and_then(|r| r.get("org_id")).and_then(|v| v.as_str()).unwrap_or(EXPONENTIAL_ORG_ID).to_string();
+    let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = turl.query_pairs_mut();
+        qp.append_pair("select", "org_id");
+        qp.append_pair("id", &format!("eq.{task_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let tresp = client
+        .get(turl.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !tresp.status().is_success() {
+        return Ok((
+            tresp.status(),
+            Body::from(tresp.text().await.unwrap_or_default()),
+        )
+            .into_response());
+    }
+    let trows: Vec<serde_json::Value> =
+        serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
+    let org_id = trows
+        .first()
+        .and_then(|r| r.get("org_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(EXPONENTIAL_ORG_ID)
+        .to_string();
 
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/task_comments")).map_err(|e| AppError::internal(e.to_string()))?;
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/task_comments"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "id,body,created_at,updated_at,author_id,author:users(id,first_name,last_name,email,avatar_url)");
@@ -1575,39 +2809,117 @@ async fn get_exponential_task_comments(
         qp.append_pair("org_id", &format!("eq.{org_id}"));
         qp.append_pair("order", "created_at.asc");
     }
-    let resp = client.get(url.as_str()).send().await.map_err(|e| AppError::internal(e.to_string()))?;
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
     let status = resp.status();
     let txt = resp.text().await.unwrap_or_default();
-    if !status.is_success() { return Ok((status, Body::from(txt)).into_response()); }
-    let comments: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    let comments: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
     Ok(Json(serde_json::json!({"comments": comments})).into_response())
 }
-
 
 async fn create_exponential_task_comment(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Path(task_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let user_id = match principal { Some(axum::extract::Extension(p)) => p.user_id, None => return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"Unauthorized"}))).into_response() };
+    let user_id = match principal {
+        Some(axum::extract::Extension(p)) => p.user_id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error":"Unauthorized"})),
+            )
+                .into_response()
+        }
+    };
     let raw_text = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
     let text = sanitize_rich_html(raw_text).trim().to_string();
-    if text.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Comment body is required"}))).into_response(); }
-    let (base,key)=match supabase_env(){Ok(v)=>v,Err(r)=>return r};
-    let client=supabase_client_with_key(&key);
-    let mut turl=url::Url::parse(&format!("{base}/rest/v1/tasks")).unwrap();
-    { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","org_id"); qp.append_pair("id",&format!("eq.{task_id}")); qp.append_pair("limit","1"); }
-    let tresp = match client.get(turl.as_str()).send().await { Ok(r)=>r, Err(e)=> return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
-    if !tresp.status().is_success() { return (tresp.status(), Body::from(tresp.text().await.unwrap_or_default())).into_response(); }
-    let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
-    let org_id = trows.first().and_then(|r| r.get("org_id")).and_then(|v| v.as_str()).unwrap_or(EXPONENTIAL_ORG_ID).to_string();
-    let payload = serde_json::json!([{"org_id":org_id,"task_id":task_id,"author_id":user_id,"body":text}]);
-    let resp = match client.post(format!("{base}/rest/v1/task_comments")).header("Prefer","return=representation").json(&payload).send().await { Ok(r)=>r, Err(e)=> return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error":e.to_string()}))).into_response() };
-    let status = resp.status(); let txt=resp.text().await.unwrap_or_default();
-    if !status.is_success() { return (status, Body::from(txt)).into_response(); }
-    let rows: serde_json::Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
-    let comment = rows.as_array().and_then(|a|a.first()).cloned().unwrap_or_else(|| serde_json::json!({}));
-    (StatusCode::CREATED, Json(serde_json::json!({"comment":comment}))).into_response()
+    if text.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Comment body is required"})),
+        )
+            .into_response();
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks")).unwrap();
+    {
+        let mut qp = turl.query_pairs_mut();
+        qp.append_pair("select", "org_id");
+        qp.append_pair("id", &format!("eq.{task_id}"));
+        qp.append_pair("limit", "1");
+    }
+    let tresp = match client.get(turl.as_str()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error":e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    if !tresp.status().is_success() {
+        return (
+            tresp.status(),
+            Body::from(tresp.text().await.unwrap_or_default()),
+        )
+            .into_response();
+    }
+    let trows: Vec<serde_json::Value> =
+        serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
+    let org_id = trows
+        .first()
+        .and_then(|r| r.get("org_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(EXPONENTIAL_ORG_ID)
+        .to_string();
+    let payload =
+        serde_json::json!([{"org_id":org_id,"task_id":task_id,"author_id":user_id,"body":text}]);
+    let resp = match client
+        .post(format!("{base}/rest/v1/task_comments"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error":e.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return (status, Body::from(txt)).into_response();
+    }
+    let rows: serde_json::Value =
+        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    let comment = rows
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({"comment":comment})),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1908,8 +3220,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
 
     let audit = audit_log.unwrap_or_else(AuditLog::from_env);
 
-    let read_rate_limiter = RateLimiter::new(config.rate_limit_read_rps, config.rate_limit_read_burst);
-    let write_rate_limiter = RateLimiter::new(config.rate_limit_write_rps, config.rate_limit_write_burst);
+    let read_rate_limiter =
+        RateLimiter::new(config.rate_limit_read_rps, config.rate_limit_read_burst);
+    let write_rate_limiter =
+        RateLimiter::new(config.rate_limit_write_rps, config.rate_limit_write_burst);
     let validation = ValidationConfig {
         max_body_size: config.max_body_size,
         audit: audit.clone(),
@@ -2026,7 +3340,9 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/tasks/{task_id}/comments",
-            axum::routing::get(get_exponential_task_comments).post(create_exponential_task_comment).with_state(tool_router.clone()),
+            axum::routing::get(get_exponential_task_comments)
+                .post(create_exponential_task_comment)
+                .with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/sprints",
@@ -2091,8 +3407,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/views",
-            axum::routing::get(get_exponential_views)
-                .post(create_exponential_view),
+            axum::routing::get(get_exponential_views).post(create_exponential_view),
         )
         .route(
             "/api/exponential/views/{view_id}",
@@ -2101,6 +3416,30 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/exponential/projects/{project_id}/assignees",
             axum::routing::get(get_exponential_project_assignees),
+        )
+        .route(
+            "/api/greenbooks/accounts",
+            axum::routing::get(greenbooks_list_accounts),
+        )
+        .route(
+            "/api/greenbooks/accounts/{id}",
+            axum::routing::get(greenbooks_get_account),
+        )
+        .route(
+            "/api/greenbooks/customers",
+            axum::routing::get(greenbooks_list_customers),
+        )
+        .route(
+            "/api/greenbooks/customers/{id}",
+            axum::routing::get(greenbooks_get_customer),
+        )
+        .route(
+            "/api/greenbooks/invoices",
+            axum::routing::get(greenbooks_list_invoices),
+        )
+        .route(
+            "/api/greenbooks/invoices/{id}",
+            axum::routing::get(greenbooks_get_invoice),
         )
         .route(
             "/api/greenbooks/{*path}",
@@ -2459,13 +3798,10 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-        let authed_router = build_exponential_router(
-            tool_router,
-            proxy_state,
-            rbac_state,
-            Some(test_principal()),
-        );
-        let resp = authed_router.clone()
+        let authed_router =
+            build_exponential_router(tool_router, proxy_state, rbac_state, Some(test_principal()));
+        let resp = authed_router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/tasks")
@@ -2479,7 +3815,8 @@ mod tests {
         let body = body_json(resp).await;
         assert!(body.get("tasks").and_then(|v| v.as_array()).is_some());
 
-        let resp = authed_router.clone()
+        let resp = authed_router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/tasks/task_1")
@@ -2561,7 +3898,8 @@ mod tests {
             rbac_state.clone(),
             None,
         );
-        let resp = unauth_router.clone()
+        let resp = unauth_router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/projects")
@@ -2585,13 +3923,10 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-        let authed_router = build_exponential_router(
-            tool_router,
-            proxy_state,
-            rbac_state,
-            Some(test_principal()),
-        );
-        let resp = authed_router.clone()
+        let authed_router =
+            build_exponential_router(tool_router, proxy_state, rbac_state, Some(test_principal()));
+        let resp = authed_router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/exponential/teams/team_1")
@@ -2657,7 +3992,11 @@ mod tests {
             None,
         );
         let routes = vec![
-            ("/api/exponential/projects/project_1/members", "members", true),
+            (
+                "/api/exponential/projects/project_1/members",
+                "members",
+                true,
+            ),
             (
                 "/api/exponential/projects/project_1/permissions?action=view",
                 "hasPermission",
@@ -2669,7 +4008,11 @@ mod tests {
                 "hasPermission",
                 false,
             ),
-            ("/api/exponential/sprints?projectId=project_1", "sprints", true),
+            (
+                "/api/exponential/sprints?projectId=project_1",
+                "sprints",
+                true,
+            ),
             ("/api/exponential/sprints/sprint_1", "sprint", false),
         ];
 
@@ -2688,12 +4031,8 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         }
 
-        let authed_router = build_exponential_router(
-            tool_router,
-            proxy_state,
-            rbac_state,
-            Some(test_principal()),
-        );
+        let authed_router =
+            build_exponential_router(tool_router, proxy_state, rbac_state, Some(test_principal()));
         for (uri, key, is_array) in routes {
             let resp = authed_router
                 .clone()
