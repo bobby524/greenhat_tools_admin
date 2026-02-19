@@ -6988,8 +6988,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         let auth_state =
             AuthState::with_cookie_name(validator, config.betterauth_cookie_name.clone())
                 .with_audit(audit.clone());
-        router = router.layer(axum_mw::from_fn_with_state(auth_state, auth_middleware));
+        // IMPORTANT: layer order matters (last added runs first).
+        // Auth must run before module RBAC so principal is available to RBAC middleware.
         router = router.layer(axum_mw::from_fn(module_access_middleware));
+        router = router.layer(axum_mw::from_fn_with_state(auth_state, auth_middleware));
     }
 
     let rate_state = crate::middleware::rate_limit::RateLimitState {
