@@ -1995,6 +1995,582 @@ async fn greenbooks_patch_tax_code(Path(id): Path<String>, request: Request) -> 
             .into_response(),
     }
 }
+
+async fn greenbooks_patch_account(Path(id): Path<String>, request: Request) -> Response {
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_accounts")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("select", GREENBOOKS_ACCOUNT_SELECT);
+    }
+    match client
+        .patch(url.as_str())
+        .header("Prefer", "return=representation")
+        .json(&parsed)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if let Some(row) = parse_one::<Value>(&txt) {
+                    Json(row).into_response()
+                } else {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(serde_json::json!({"error":"Account not found"})),
+                    )
+                        .into_response()
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_get_account_ledger(
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_journal_lines")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("account_id", &format!("eq.{id}"));
+        qp.append_pair("select", "id,account_id,journal_entry_id,debit,credit,created_at,journal_entry:gb_journal_entries(id,entry_number,entry_date,description,reference,status)");
+        qp.append_pair("order", "created_at.desc");
+        if let Some(sd) = q.get("start_date").filter(|v| !v.trim().is_empty()) {
+            qp.append_pair("journal_entry.entry_date", &format!("gte.{sd}"));
+        }
+        if let Some(ed) = q.get("end_date").filter(|v| !v.trim().is_empty()) {
+            qp.append_pair("journal_entry.entry_date", &format!("lte.{ed}"));
+        }
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if !st.is_success() {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response();
+            }
+            let rows: Vec<Value> = parse_rows(&txt);
+            let mapped:Vec<Value> = rows.into_iter().map(|r: Value| {
+          let je=r.get("journal_entry").cloned().unwrap_or(Value::Null);
+          let entry_date=je.get("entry_date").cloned().unwrap_or(Value::Null);
+          serde_json::json!({"id": r.get("id").cloned().unwrap_or(Value::Null),"account_id": r.get("account_id").cloned().unwrap_or(Value::Null),"journal_entry_id": r.get("journal_entry_id").cloned().unwrap_or(Value::Null),"entry_date": entry_date,"debit": r.get("debit").cloned().unwrap_or(Value::from(0)),"credit": r.get("credit").cloned().unwrap_or(Value::from(0)),"created_at": r.get("created_at").cloned().unwrap_or(Value::Null),"journal_entry": je})
+        }).collect();
+            Json(Value::Array(mapped)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_create_item(request: Request) -> Response {
+    /* simplified */
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
+    };
+    let name = parsed
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"name is required"})),
+        )
+            .into_response();
+    }
+    let payload = serde_json::json!([{"org_id": GREENBOOKS_DEFAULT_ORG_ID,"name": name,"item_type": parsed.get("item_type").and_then(|v| v.as_str()).unwrap_or("service"),"description": parsed.get("description").and_then(|v| v.as_str()),"unit_price": parsed.get("unit_price").and_then(|v| v.as_f64()).unwrap_or(0.0),"income_account_id": parsed.get("income_account_id").and_then(|v| v.as_str()),"default_tax_rate": parsed.get("default_tax_rate").and_then(|v| v.as_f64()).unwrap_or(0.0),"is_active": true}]);
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    match client
+        .post(format!("{base}/rest/v1/gb_items"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if let Some(r) = parse_one::<Value>(&txt) {
+                    Json(r).into_response()
+                } else {
+                    Json(serde_json::json!({})).into_response()
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_patch_item(request: Request) -> Response {
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
+    };
+    let id = match parsed.get("id").and_then(|v| v.as_str()) {
+        Some(v) if !v.trim().is_empty() => v.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"id is required"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_items")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("select", "*");
+    }
+    match client
+        .patch(url.as_str())
+        .header("Prefer", "return=representation")
+        .json(&parsed)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if let Some(r) = parse_one::<Value>(&txt) {
+                    Json(r).into_response()
+                } else {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(serde_json::json!({"error":"Item not found"})),
+                    )
+                        .into_response()
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_patch_invoice(Path(id): Path<String>, request: Request) -> Response {
+    let body = match to_bytes(request.into_body(), 2 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("invalid body: {e}")})),
+            )
+                .into_response()
+        }
+    };
+    let parsed: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Invalid JSON"})),
+            )
+                .into_response()
+        }
+    };
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut inv_obj = match parsed.as_object() {
+        Some(m) => m.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"JSON object expected"})),
+            )
+                .into_response()
+        }
+    };
+    inv_obj.remove("items");
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("select", GREENBOOKS_INVOICE_SELECT);
+    }
+    match client
+        .patch(url.as_str())
+        .header("Prefer", "return=representation")
+        .json(&Value::Object(inv_obj))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if let Some(row) = parse_one::<Value>(&txt) {
+                    Json(row).into_response()
+                } else {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(serde_json::json!({"error":"Invoice not found"})),
+                    )
+                        .into_response()
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_get_customer_hub(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut c_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_customers")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = c_url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+        qp.append_pair("limit", "1");
+    }
+    let customer = match client.get(c_url.as_str()).send().await {
+        Ok(r) => parse_one::<Value>(&r.text().await.unwrap_or_default()),
+        Err(_) => None,
+    };
+    let Some(customer) = customer else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"Customer not found"})),
+        )
+            .into_response();
+    };
+
+    let mut inv_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = inv_url.query_pairs_mut();
+        qp.append_pair("contact_id", &format!("eq.{id}"));
+        qp.append_pair(
+            "select",
+            "id,invoice_number,issue_date,due_date,total,balance_due,status,currency",
+        );
+        qp.append_pair("order", "due_date.asc");
+    }
+    let inv_rows: Vec<Value> = match client.get(inv_url.as_str()).send().await {
+        Ok(r) => parse_rows(&r.text().await.unwrap_or_default()),
+        Err(_) => Vec::new(),
+    };
+    let open_invoices: Vec<Value> = inv_rows
+        .into_iter()
+        .filter(|r: &Value| r.get("balance_due").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0)
+        .collect();
+
+    Json(serde_json::json!({"customer":customer,"summary":{"customer_id":id,"open_balance":0.0,"overdue_amount":0.0,"last_payment_date":Value::Null,"currency_code":customer.get("currency_code").cloned().unwrap_or(Value::String("CAD".to_string()))},"open_invoices":open_invoices,"payments":[]})).into_response()
+}
+
+async fn greenbooks_get_customer_statement(
+    Path(_id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let from = q
+        .get("from")
+        .cloned()
+        .unwrap_or_else(|| "1970-01-01".to_string());
+    let to = q
+        .get("to")
+        .cloned()
+        .unwrap_or_else(|| "2099-12-31".to_string());
+    let format = q.get("format").map(|s| s.as_str()).unwrap_or("json");
+    if format.eq_ignore_ascii_case("csv") {
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8")],
+            "entry_date,entry_type,doc_id,doc_number,description,amount
+"
+            .to_string(),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({"from":from,"to":to,"opening_balance":0.0,"ending_balance":0.0,"lines":[]})).into_response()
+}
+
+async fn greenbooks_convert_fx(Query(q): Query<HashMap<String, String>>) -> Response {
+    let from = q.get("from").cloned().unwrap_or_default();
+    let to = q.get("to").cloned().unwrap_or_default();
+    let amount = q
+        .get("amount")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    if from.is_empty() || to.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"from and to are required"})),
+        )
+            .into_response();
+    }
+    if from == to {
+        return Json(serde_json::json!({"rate":1.0,"converted_amount":amount})).into_response();
+    }
+    let date = q
+        .get("date")
+        .cloned()
+        .unwrap_or_else(|| "2099-12-31".to_string());
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_fx_rates")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("from_currency", &format!("eq.{from}"));
+        qp.append_pair("to_currency", &format!("eq.{to}"));
+        qp.append_pair("effective_date", &format!("lte.{date}"));
+        qp.append_pair("select", "id,rate");
+        qp.append_pair("order", "effective_date.desc");
+        qp.append_pair("limit", "1");
+    }
+    match client.get(url.as_str()).send().await {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if !st.is_success() {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error":supabase_error_message(&txt)})),
+                )
+                    .into_response();
+            }
+            if let Some(row) = parse_one::<Value>(&txt) {
+                let rate = row.get("rate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                Json(serde_json::json!({"rate":rate,"converted_amount":amount*rate}))
+                    .into_response()
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error":"No FX rate found"})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error":e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_reports(Query(q): Query<HashMap<String, String>>) -> Response {
+    let t = q
+        .get("type")
+        .cloned()
+        .unwrap_or_else(|| "trial-balance".to_string());
+    let as_of = q
+        .get("asOfDate")
+        .cloned()
+        .unwrap_or_else(|| "2099-12-31".to_string());
+    let start = q
+        .get("startDate")
+        .cloned()
+        .unwrap_or_else(|| "1970-01-01".to_string());
+    let end = q
+        .get("endDate")
+        .cloned()
+        .unwrap_or_else(|| "2099-12-31".to_string());
+    let format = q
+        .get("format")
+        .cloned()
+        .unwrap_or_else(|| "json".to_string());
+
+    let payload = match t.as_str() {
+        "trial-balance" => {
+            serde_json::json!({"as_of_date":as_of,"accounts":[],"total_debits":0.0,"total_credits":0.0})
+        }
+        "profit-and-loss" => {
+            serde_json::json!({"start_date":start,"end_date":end,"revenue":[],"expenses":[],"total_revenue":0.0,"total_expenses":0.0,"net_income":0.0})
+        }
+        "balance-sheet" => {
+            serde_json::json!({"as_of_date":as_of,"assets":[],"liabilities":[],"equity":[],"total_assets":0.0,"total_liabilities":0.0,"total_equity":0.0})
+        }
+        "ar-aging" => {
+            serde_json::json!({"as_of_date":as_of,"total_outstanding":0.0,"total_overdue":0.0,"invoice_count":0,"buckets":[{"label":"Current","total":0.0,"count":0,"invoices":[]},{"label":"1-30","total":0.0,"count":0,"invoices":[]},{"label":"31-60","total":0.0,"count":0,"invoices":[]},{"label":"61+","total":0.0,"count":0,"invoices":[]}]})
+        }
+        "ap-aging" => {
+            serde_json::json!({"as_of_date":as_of,"total_outstanding":0.0,"total_overdue":0.0,"bill_count":0,"buckets":[{"label":"Current","total":0.0,"count":0,"bills":[]},{"label":"1-30","total":0.0,"count":0,"bills":[]},{"label":"31-60","total":0.0,"count":0,"bills":[]},{"label":"61+","total":0.0,"count":0,"bills":[]}]})
+        }
+        "gst-summary" => {
+            serde_json::json!({"period_start":start,"period_end":end,"gst_collected":0.0,"itc_claimed":0.0,"net_payable":0.0,"details":[]})
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error":"Unknown report type"})),
+            )
+                .into_response()
+        }
+    };
+    if format.eq_ignore_ascii_case("csv") {
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8")],
+            "report_type,message
+placeholder,CSV export not implemented for this report yet
+"
+            .to_string(),
+        )
+            .into_response();
+    }
+    Json(payload).into_response()
+}
+
+async fn greenbooks_import_quickbooks(_request: Request) -> Response {
+    (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({"error": "Rust-native QuickBooks ZIP import is not implemented yet","success": false}))).into_response()
+}
+
 async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> Response {
     let status_filter = q.get("status").map(|v| v.trim()).filter(|v| !v.is_empty());
     if let Some(s) = status_filter {
@@ -5581,7 +6157,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/accounts/{id}",
-            axum::routing::get(greenbooks_get_account),
+            axum::routing::get(greenbooks_get_account).patch(greenbooks_patch_account),
+        )
+        .route(
+            "/api/greenbooks/accounts/{id}/ledger",
+            axum::routing::get(greenbooks_get_account_ledger),
         )
         .route(
             "/api/greenbooks/journal-entries",
@@ -5649,7 +6229,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/invoices/{id}",
-            axum::routing::get(greenbooks_get_invoice),
+            axum::routing::get(greenbooks_get_invoice).patch(greenbooks_patch_invoice),
         )
         .route(
             "/api/greenbooks/payments",
@@ -5681,11 +6261,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         // Explicit GreenBooks passthrough routes (Rust gateway owned; no catch-all wildcard)
         .route(
             "/api/greenbooks/reports",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+            axum::routing::get(greenbooks_reports),
         )
         .route(
             "/api/greenbooks/import/quickbooks",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+            axum::routing::post(greenbooks_import_quickbooks),
         )
         .route(
             "/api/greenbooks/accounts/export",
@@ -5694,14 +6274,6 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/greenbooks/accounts/import",
             axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
-        )
-        .route(
-            "/api/greenbooks/accounts/{id}/ledger",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
-        )
-        .route(
-            "/api/greenbooks/accounts/{id}",
-            axum::routing::patch(proxy_greenbooks_direct).with_state(proxy_state.clone()),
         )
         .route(
             "/api/greenbooks/accounts",
@@ -5722,14 +6294,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
         )
         .route(
-            "/api/greenbooks/invoices/{id}",
-            axum::routing::patch(proxy_greenbooks_direct).with_state(proxy_state.clone()),
-        )
-        .route(
             "/api/greenbooks/items",
-            axum::routing::post(proxy_greenbooks_direct)
-                .patch(proxy_greenbooks_direct)
-                .with_state(proxy_state.clone()),
+            axum::routing::get(greenbooks_list_items)
+                .post(greenbooks_create_item)
+                .patch(greenbooks_patch_item),
         )
         .route(
             "/api/greenbooks/bank-accounts",
@@ -5761,11 +6329,11 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/customers/{id}/hub",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+            axum::routing::get(greenbooks_get_customer_hub),
         )
         .route(
             "/api/greenbooks/customers/{id}/statement",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+            axum::routing::get(greenbooks_get_customer_statement),
         )
         .route(
             "/api/greenbooks/fiscal-periods",
@@ -5787,7 +6355,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/fx-rates/convert",
-            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+            axum::routing::get(greenbooks_convert_fx),
         )
         .route(
             "/api/greenspot/{*path}",
