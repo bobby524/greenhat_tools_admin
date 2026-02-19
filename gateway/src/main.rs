@@ -37,8 +37,21 @@ async fn main() {
     // 2. Prometheus metrics recorder
     let metrics_handle = metrics::setup_recorder();
 
-    // 3. Build config + router from the library crate
-    let config = GatewayConfig::from_env();
+    // 3. Build + validate config before serving traffic
+    let config = match GatewayConfig::from_env_validated() {
+        Ok(cfg) => cfg,
+        Err(errors) => {
+            tracing::error!(
+                count = errors.len(),
+                "gateway startup config validation failed"
+            );
+            for err in errors {
+                tracing::error!(field = err.field, message = %err.message, "invalid config");
+            }
+            std::process::exit(1);
+        }
+    };
+
     let mut router = gateway::app(&config, None);
 
     // Bolt on /metrics (needs its own state; lives outside the auth stack)

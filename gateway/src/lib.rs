@@ -4342,19 +4342,16 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         audit: audit.clone(),
     };
 
-    let allowed_origins: Vec<HeaderValue> = [
-        "https://tools.greenhatsec.com",
-        "https://admin.greenhatsec.com",
-    ]
-    .iter()
-    .filter_map(|origin| match origin.parse::<HeaderValue>() {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::error!(origin = %origin, error = %e, "invalid CORS allow origin configured");
-            None
-        }
-    })
-    .collect();
+    let allowed_origins: Vec<HeaderValue> = config
+        .cors_allow_origins
+        .iter()
+        .map(|origin| {
+            // Safe unwrap: config validation runs at startup and guarantees valid origins.
+            origin
+                .parse::<HeaderValue>()
+                .expect("validated CORS origin should be a valid HTTP header value")
+        })
+        .collect();
 
     let cors = CorsLayer::new()
         .allow_origin(allowed_origins)

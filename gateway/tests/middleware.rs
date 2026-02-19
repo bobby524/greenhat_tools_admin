@@ -19,6 +19,7 @@ fn test_config(burst: u32) -> GatewayConfig {
         rate_limit_write_rps: 0.0,
         rate_limit_write_burst: burst,
         max_body_size: 256,
+        cors_allow_origins: vec!["https://tools.greenhatsec.com".to_owned()],
         csrf_enabled: false,
         csrf_cookie_name: "csrf_token".to_owned(),
         csrf_cookie_domain: None,
@@ -26,6 +27,7 @@ fn test_config(burst: u32) -> GatewayConfig {
 
         auth_enabled: false,
         betterauth_base_url: "http://localhost:3000".to_owned(),
+        proxy_upstream_base_url: "http://localhost:3000".to_owned(),
         betterauth_cookie_name: "better-auth.session_token".to_owned(),
         betterauth_timeout_ms: 2000,
         policy_file: None,
