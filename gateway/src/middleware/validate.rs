@@ -103,7 +103,12 @@ pub async fn validate_request(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        if !content_type.starts_with("application/json") {
+        // Allow multipart uploads for Rust-native QuickBooks import.
+        let allows_multipart = path == "/api/greenbooks/import/quickbooks"
+            && request.method() == Method::POST
+            && content_type.starts_with("multipart/form-data");
+
+        if !allows_multipart && !content_type.starts_with("application/json") {
             config.audit.emit(AuditEvent::new(
                 "tool.invoke_rejected",
                 &request_id,
@@ -116,7 +121,7 @@ pub async fn validate_request(
                 }),
             ));
             return Err(AppError::unsupported_media_type(
-                "Content-Type must be application/json",
+                "Content-Type must be application/json (or multipart/form-data for QuickBooks import)",
             ));
         }
     }
