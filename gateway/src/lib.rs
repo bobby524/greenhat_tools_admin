@@ -1284,9 +1284,16 @@ async fn greenbooks_list_audit(Query(q): Query<HashMap<String, String>>) -> Resp
                 return Json(serde_json::json!({"entries": entries, "total": effective_total}))
                     .into_response();
             }
+            let msg = supabase_error_message(&txt);
+            if msg.to_ascii_lowercase().contains("relation")
+                && msg.to_ascii_lowercase().contains("gb_audit_trail")
+                && msg.to_ascii_lowercase().contains("does not exist")
+            {
+                return Json(serde_json::json!({"entries": [], "total": 0})).into_response();
+            }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": supabase_error_message(&txt)})),
+                Json(serde_json::json!({"error": msg})),
             )
                 .into_response()
         }
