@@ -1,0 +1,10 @@
+# Runtime panic allowlist (startup invariants only).
+# Format: file_substring::code_substring
+#
+# Policy:
+# - Allow only startup-fail invariants that must abort boot when violated.
+# - Never allow request-path panic/unwrap/expect patterns.
+# - Keep entries exact and narrowly scoped.
+
+gateway/src/lib.rs::panic!("failed to load policy from
+gateway/src/lib.rs::expect("validated CORS origin should be a valid HTTP header value")

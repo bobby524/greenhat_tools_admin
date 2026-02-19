@@ -66,6 +66,13 @@ Reason: preserve observability, enforce security early, and avoid work on reques
 - Regression tests for known incidents (e.g., request storms, auth bypass cases).
 - Add one test whenever adding a new security control or env flag.
 
+## 11) Panic-safety enforcement (runtime)
+- Runtime request paths must not introduce `unwrap(` / `expect(` / `panic!(`.
+- Enforce with `./scripts/check-runtime-panics.sh` locally and in CI.
+- Test-only regions are excluded (`#[cfg(test)]`).
+- Startup-fail invariants are the only allowed exceptions and must be explicitly documented in `scripts/runtime-panic-allowlist.txt` with narrow matching.
+- Any new allowlist entry requires a short reason in PR notes and should remain startup-only (never request-path).
+
 ---
 
 ## Refactor checklist for new module migrations

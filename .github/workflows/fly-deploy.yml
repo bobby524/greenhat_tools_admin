@@ -18,6 +18,9 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: runtime panic guard
+        run: ./scripts/check-runtime-panics.sh
+
       - name: Deploy to Fly (greenhat-tools-admin-cmmugg)
         run: flyctl deploy --remote-only -a greenhat-tools-admin-cmmugg
         env:

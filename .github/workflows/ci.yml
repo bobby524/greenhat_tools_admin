@@ -48,6 +48,9 @@ jobs:
       - name: cargo clippy (mcp-spike, advisory)
         run: cargo clippy -p mcp-spike --all-targets 2>&1 || true
 
+      - name: runtime panic guard
+        run: ./scripts/check-runtime-panics.sh
+
       - name: cargo test
         run: cargo test -p gateway -p mcp-spike
 
