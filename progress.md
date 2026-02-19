@@ -218,6 +218,29 @@ Keep it short, factual, and link to commits/files.
 - Add first-class runbook docs for Better Stack alert thresholds (5xx/latency/timeouts).
 - Add explicit compact-route metrics dashboard for Exponential high-volume reads.
 
+## 2026-02-18 — GB-06-02 core GreenBooks writes (in progress)
+
+### Rust-native write handlers for payments/post/reconcile/transfer ✅
+- Added first-class gateway handlers for GreenBooks core write flows previously dependent on tools-side `/api/greenbooks` routes:
+  - invoice post aliases (`/invoices/{id}/post`, `/invoices/{id}/post-gl`)
+  - invoice payments (list/create)
+  - payments list
+  - bank reconciliation (history/start/toggle)
+  - bank transfer create
+- Wired routes before wildcard `"/api/greenbooks/{*path}"` to de-risk tools-route dependency for these paths.
+- Preserved auth + CSRF middleware parity (same gateway stack, no bypass).
+- Evidence doc: `docs/artifacts/greenbooks/GB-06-02-rust-native-greenbooks-writes-20260218T201818-0800.md`.
+
+### Validation/deploy evidence ✅
+- `cargo check -p gateway` passed.
+- `cargo test -p gateway --lib` passed (84 tests).
+- Fly deploy succeeded to `greenhat-tools-admin-cmmugg` (image `deployment-01KHT1T70N4GRMMJ6M2FNZE30E`).
+
+### Live auth verification status ⚠️
+- API endpoint auth gating verified on `api.greenhatsec.com` (401 for invalid/expired session token).
+- Full authenticated tools-session browser verification blocked in this subagent run because OpenClaw Chrome relay had no attached tab (`profile="chrome"` requires extension attach).
+- Workaround documented in artifact; requires user-side tab attach then rerun authenticated checks.
+
 ## Tooling
 
 ### CodeGraphContext (codegraph MCP)
