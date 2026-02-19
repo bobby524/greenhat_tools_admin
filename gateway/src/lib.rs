@@ -5394,9 +5394,10 @@ async fn get_exponential_team(
         let mut qp = purl.query_pairs_mut();
         qp.append_pair("select", "*");
         qp.append_pair("team_id", &format!("eq.{team_id}"));
+        qp.append_pair("order", "archived_at.asc.nullslast");
         qp.append_pair("order", "name.asc");
     }
-    let projects: serde_json::Value = serde_json::from_str(
+    let mut projects: Vec<serde_json::Value> = serde_json::from_str(
         &client
             .get(purl.as_str())
             .send()
@@ -5406,7 +5407,60 @@ async fn get_exponential_team(
             .await
             .unwrap_or_default(),
     )
-    .unwrap_or_else(|_| serde_json::json!([]));
+    .unwrap_or_default();
+
+    // Attach task counts (non-archived tasks only) so team page cards are accurate.
+    let project_ids: Vec<String> = projects
+        .iter()
+        .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    if !project_ids.is_empty() {
+        let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks"))
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        {
+            let mut qp = turl.query_pairs_mut();
+            qp.append_pair("select", "project_id,status");
+            qp.append_pair("project_id", &format!("in.({})", project_ids.join(",")));
+            qp.append_pair("archived_at", "is.null");
+        }
+        let tresp = client
+            .get(turl.as_str())
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        if tresp.status().is_success() {
+            let ttxt = tresp.text().await.unwrap_or_default();
+            let tasks: Vec<serde_json::Value> = serde_json::from_str(&ttxt).unwrap_or_default();
+            let mut total_counts: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut done_counts: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            for t in tasks.iter() {
+                if let Some(pid) = t.get("project_id").and_then(|v| v.as_str()) {
+                    *total_counts.entry(pid.to_string()).or_insert(0) += 1;
+                    if t.get("status").and_then(|v| v.as_str()) == Some("done") {
+                        *done_counts.entry(pid.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+            for p in projects.iter_mut() {
+                let pid = p.get("id").and_then(|v| v.as_str()).map(|v| v.to_string());
+                if let Some(pid) = pid {
+                    if let Some(obj) = p.as_object_mut() {
+                        obj.insert(
+                            "task_count".to_string(),
+                            serde_json::json!(total_counts.get(&pid).copied().unwrap_or(0)),
+                        );
+                        obj.insert(
+                            "completed_count".to_string(),
+                            serde_json::json!(done_counts.get(&pid).copied().unwrap_or(0)),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({"team": team, "projects": projects})).into_response())
 }
 
