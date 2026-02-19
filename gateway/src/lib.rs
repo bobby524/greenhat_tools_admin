@@ -30,6 +30,7 @@ use tracing::info_span;
 use uuid::Uuid;
 
 use crate::audit::AuditLog;
+// BA_DECOUPLE_TAG: App wiring for BetterAuth validator + auth middleware order.
 use crate::auth::{AuthState, BetterAuthClient};
 use crate::config::GatewayConfig;
 use crate::egress::{EgressClient, EgressError};

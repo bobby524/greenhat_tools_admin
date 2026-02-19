@@ -1,4 +1,4 @@
-//! Session validation trait and BetterAuth HTTP implementation.
+//! BA_DECOUPLE_TAG: Session validation trait and BetterAuth HTTP implementation.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

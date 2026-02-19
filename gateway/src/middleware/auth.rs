@@ -1,3 +1,4 @@
+// BA_DECOUPLE_TAG: Gateway auth middleware with Better Auth cookie aliases.
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, Method};
 use axum::middleware::Next;

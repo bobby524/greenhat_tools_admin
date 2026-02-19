@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
 // Gateway configuration — loaded from environment variables
 // ---------------------------------------------------------------------------
+// BA_DECOUPLE_TAG: BetterAuth and CSRF runtime config coupling.
 
 use std::path::Path;
 
