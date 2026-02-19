@@ -271,6 +271,15 @@ fn supabase_error_message(body: &str) -> String {
         .unwrap_or_else(|| body.to_string())
 }
 
+fn parse_bool_query_param(raw: Option<&String>) -> Result<Option<bool>, &'static str> {
+    match raw.map(|v| v.trim().to_ascii_lowercase()) {
+        None => Ok(None),
+        Some(v) if v == "true" => Ok(Some(true)),
+        Some(v) if v == "false" => Ok(Some(false)),
+        Some(_) => Err("active must be true or false"),
+    }
+}
+
 fn parse_upstream_url_or_500(raw: &str) -> Result<url::Url, Response> {
     url::Url::parse(raw).map_err(|e| {
         standard_error_response(
@@ -291,12 +300,10 @@ async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> R
         }
     }
 
-    let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
-    if let Some(ref v) = active {
-        if v != "true" && v != "false" {
-            return legacy_error_response(StatusCode::BAD_REQUEST, "active must be true or false");
-        }
-    }
+    let active = match parse_bool_query_param(q.get("active")) {
+        Ok(v) => v,
+        Err(msg) => return legacy_error_response(StatusCode::BAD_REQUEST, msg),
+    };
 
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -389,12 +396,10 @@ async fn greenbooks_get_account(Path(id): Path<String>) -> Response {
 
 async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> Response {
     let search = q.get("search").map(|v| v.trim()).filter(|v| !v.is_empty());
-    let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
-    if let Some(ref v) = active {
-        if v != "true" && v != "false" {
-            return legacy_error_response(StatusCode::BAD_REQUEST, "active must be true or false");
-        }
-    }
+    let active = match parse_bool_query_param(q.get("active")) {
+        Ok(v) => v,
+        Err(msg) => return legacy_error_response(StatusCode::BAD_REQUEST, msg),
+    };
     let limit = q
         .get("limit")
         .and_then(|v| v.parse::<i64>().ok())
@@ -411,7 +416,7 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
     let rpc_body = serde_json::json!({
         "p_org_id": GREENBOOKS_DEFAULT_ORG_ID,
         "p_search": search,
-        "p_active": active.as_ref().map(|v| v == "true"),
+        "p_active": active,
         "p_limit": limit,
     });
 
@@ -4342,6 +4347,7 @@ mod tests {
     use axum::middleware::{self as axum_mw, Next};
     use axum::routing::get;
     use http_body_util::BodyExt;
+    use proptest::prelude::*;
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::sync::Once;
@@ -4967,5 +4973,25 @@ mod tests {
         assert_eq!(body["error"]["code"], 401);
         assert_eq!(body["error"]["kind"], "unauthorized");
         assert_eq!(body["error"]["message"], "Unauthorized");
+    }
+
+    proptest! {
+        #[test]
+        fn supabase_error_message_prefers_message_field(msg in ".{1,64}", fallback in ".{1,64}") {
+            let body = serde_json::json!({ "message": msg, "error": fallback }).to_string();
+            prop_assert_eq!(supabase_error_message(&body), msg);
+        }
+
+        #[test]
+        fn parse_bool_query_param_accepts_case_and_whitespace(flag in prop_oneof![Just("true"), Just("false")], lead_ws in "[ \t]{0,3}", trail_ws in "[ \t]{0,3}", mixed_case in any::<bool>()) {
+            let token = if mixed_case {
+                flag.chars().enumerate().map(|(i, c)| if i % 2 == 0 { c.to_ascii_uppercase() } else { c }).collect::<String>()
+            } else {
+                flag.to_string()
+            };
+            let value = format!("{lead_ws}{token}{trail_ws}");
+            let out = parse_bool_query_param(Some(&value)).expect("valid boolish value");
+            prop_assert_eq!(out, Some(flag == "true"));
+        }
     }
 }

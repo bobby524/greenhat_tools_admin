@@ -693,7 +693,10 @@ impl ToolRouter {
                         })
                     };
                     let payload = serde_json::json!({ "members": [member] });
-                    return Ok(ToolOk { status: Some(200), data: payload.to_string() });
+                    return Ok(ToolOk {
+                        status: Some(200),
+                        data: payload.to_string(),
+                    });
                 }
                 let base = std::env::var("SUPABASE_URL")
                     .ok()
@@ -757,9 +760,18 @@ impl ToolRouter {
                             data: serde_json::json!({"error":"Unauthorized"}).to_string(),
                         });
                     }
-                    let table = if resource == "project" { "project_members" } else { "team_members" };
-                    let fk = if resource == "project" { "project_id" } else { "team_id" };
-                    let mut check = url::Url::parse(&format!("{base}/rest/v1/{table}")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                    let table = if resource == "project" {
+                        "project_members"
+                    } else {
+                        "team_members"
+                    };
+                    let fk = if resource == "project" {
+                        "project_id"
+                    } else {
+                        "team_id"
+                    };
+                    let mut check = url::Url::parse(&format!("{base}/rest/v1/{table}"))
+                        .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
                     {
                         let mut qp = check.query_pairs_mut();
                         qp.append_pair("select", "id");
@@ -773,17 +785,23 @@ impl ToolRouter {
                         .header("apikey", &key)
                         .header("Authorization", format!("Bearer {key}"))
                         .send()
-                        .await
-                        ?;
+                        .await?;
                     if !resp.status().is_success() {
                         let status = resp.status().as_u16();
                         let text = resp.text().await.unwrap_or_default();
-                        return Ok(ToolOk { status: Some(status), data: text });
+                        return Ok(ToolOk {
+                            status: Some(status),
+                            data: text,
+                        });
                     }
                     let rows: serde_json::Value = resp.json().await?;
                     let allowed = rows.as_array().map(|a| !a.is_empty()).unwrap_or(false);
                     if !allowed {
-                        let msg = if resource == "project" { "You are not a member of this project" } else { "You are not a member of this team" };
+                        let msg = if resource == "project" {
+                            "You are not a member of this project"
+                        } else {
+                            "You are not a member of this team"
+                        };
                         return Ok(ToolOk {
                             status: Some(403),
                             data: serde_json::json!({"error": msg}).to_string(),
@@ -791,12 +809,24 @@ impl ToolRouter {
                     }
                 }
 
-                let table = if resource == "project" { "project_members" } else { "team_members" };
-                let fk = if resource == "project" { "project_id" } else { "team_id" };
-                let mut url = url::Url::parse(&format!("{base}/rest/v1/{table}")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                let table = if resource == "project" {
+                    "project_members"
+                } else {
+                    "team_members"
+                };
+                let fk = if resource == "project" {
+                    "project_id"
+                } else {
+                    "team_id"
+                };
+                let mut url = url::Url::parse(&format!("{base}/rest/v1/{table}"))
+                    .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
                 {
                     let mut qp = url.query_pairs_mut();
-                    qp.append_pair("select", "*,user:users(id,first_name,last_name,email,avatar_url)");
+                    qp.append_pair(
+                        "select",
+                        "*,user:users(id,first_name,last_name,email,avatar_url)",
+                    );
                     qp.append_pair(fk, &format!("eq.{id}"));
                     qp.append_pair("order", "created_at.asc");
                 }
@@ -806,12 +836,14 @@ impl ToolRouter {
                     .header("apikey", &key)
                     .header("Authorization", format!("Bearer {key}"))
                     .send()
-                    .await
-                    ?;
+                    .await?;
                 let status = resp.status().as_u16();
                 let text = resp.text().await.unwrap_or_default();
                 if !(200..300).contains(&status) {
-                    return Ok(ToolOk { status: Some(status), data: text });
+                    return Ok(ToolOk {
+                        status: Some(status),
+                        data: text,
+                    });
                 }
                 let payload = serde_json::json!({"members": serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|_| serde_json::json!([]))});
                 Ok(ToolOk {
@@ -828,12 +860,19 @@ impl ToolRouter {
                 if cfg!(test) {
                     let data = match kind {
                         "list_projects" => serde_json::json!({"projects": []}),
-                        "get_project" => serde_json::json!({"project": {"id": id.unwrap_or_default()}, "tasks": [], "sprints": [], "members": [], "user_role": "lead", "permissions": {"can_manage": true, "can_create_tasks": true, "can_edit_tasks": true, "can_manage_members": true}}),
+                        "get_project" => {
+                            serde_json::json!({"project": {"id": id.unwrap_or_default()}, "tasks": [], "sprints": [], "members": [], "user_role": "lead", "permissions": {"can_manage": true, "can_create_tasks": true, "can_edit_tasks": true, "can_manage_members": true}})
+                        }
                         "list_teams" => serde_json::json!({"teams": []}),
-                        "get_team" => serde_json::json!({"team": {"id": id.unwrap_or_default()}, "projects": []}),
+                        "get_team" => {
+                            serde_json::json!({"team": {"id": id.unwrap_or_default()}, "projects": []})
+                        }
                         _ => serde_json::json!({}),
                     };
-                    return Ok(ToolOk { status: Some(200), data: data.to_string() });
+                    return Ok(ToolOk {
+                        status: Some(200),
+                        data: data.to_string(),
+                    });
                 }
 
                 let base = std::env::var("SUPABASE_URL")
@@ -844,52 +883,141 @@ impl ToolRouter {
                 let base = base.trim().trim_end_matches('/').to_string();
                 let key = key.trim().to_string();
                 if base.is_empty() || key.is_empty() {
-                    return Ok(ToolOk { status: Some(500), data: serde_json::json!({"error":"Supabase env not configured in gateway"}).to_string() });
+                    return Ok(ToolOk {
+                        status: Some(500),
+                        data: serde_json::json!({"error":"Supabase env not configured in gateway"})
+                            .to_string(),
+                    });
                 }
                 let org_id = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
                 let client = reqwest::Client::new();
 
                 match kind {
                     "list_projects" => {
-                        let mut url = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        let mut url = url::Url::parse(&format!("{base}/rest/v1/projects"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
                         {
                             let mut qp = url.query_pairs_mut();
                             qp.append_pair("select", "*,team:teams(id,name,slug,color)");
                             qp.append_pair("org_id", &format!("eq.{org_id}"));
                             qp.append_pair("order", "name.asc");
-                            if !include_archived { qp.append_pair("archived_at", "is.null"); }
-                            if let Some(tid) = team_id { qp.append_pair("team_id", &format!("eq.{tid}")); }
+                            if !include_archived {
+                                qp.append_pair("archived_at", "is.null");
+                            }
+                            if let Some(tid) = team_id {
+                                qp.append_pair("team_id", &format!("eq.{tid}"));
+                            }
                         }
-                        let resp = client.get(url.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let resp = client
+                            .get(url.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
                         let status = resp.status().as_u16();
                         let text = resp.text().await.unwrap_or_default();
-                        if !(200..300).contains(&status) { return Ok(ToolOk { status: Some(status), data: text }); }
-                        let projects: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
-                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"projects": projects}).to_string() })
+                        if !(200..300).contains(&status) {
+                            return Ok(ToolOk {
+                                status: Some(status),
+                                data: text,
+                            });
+                        }
+                        let projects: serde_json::Value =
+                            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk {
+                            status: Some(200),
+                            data: serde_json::json!({"projects": projects}).to_string(),
+                        })
                     }
                     "get_project" => {
                         let pid = id.unwrap_or_default();
-                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*,team:teams(id,name,slug,color)"); qp.append_pair("id", &format!("eq.{pid}")); qp.append_pair("limit","1"); }
-                        let presp = client.get(purl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
-                        if !presp.status().is_success() { return Ok(ToolOk { status: Some(presp.status().as_u16()), data: presp.text().await.unwrap_or_default() }); }
-                        let prow: Vec<serde_json::Value> = serde_json::from_str(&presp.text().await.unwrap_or_default()).unwrap_or_default();
-                        if prow.is_empty() { return Ok(ToolOk { status: Some(404), data: serde_json::json!({"error":"Project not found"}).to_string()}); }
+                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = purl.query_pairs_mut();
+                            qp.append_pair("select", "*,team:teams(id,name,slug,color)");
+                            qp.append_pair("id", &format!("eq.{pid}"));
+                            qp.append_pair("limit", "1");
+                        }
+                        let presp = client
+                            .get(purl.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
+                        if !presp.status().is_success() {
+                            return Ok(ToolOk {
+                                status: Some(presp.status().as_u16()),
+                                data: presp.text().await.unwrap_or_default(),
+                            });
+                        }
+                        let prow: Vec<serde_json::Value> =
+                            serde_json::from_str(&presp.text().await.unwrap_or_default())
+                                .unwrap_or_default();
+                        if prow.is_empty() {
+                            return Ok(ToolOk {
+                                status: Some(404),
+                                data: serde_json::json!({"error":"Project not found"}).to_string(),
+                            });
+                        }
                         let project = prow[0].clone();
 
-                        let mut surl = url::Url::parse(&format!("{base}/rest/v1/sprints")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=surl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("project_id", &format!("eq.{pid}")); qp.append_pair("order","number.asc"); }
-                        let sresp = client.get(surl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
-                        let sprints: serde_json::Value = serde_json::from_str(&sresp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+                        let mut surl = url::Url::parse(&format!("{base}/rest/v1/sprints"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = surl.query_pairs_mut();
+                            qp.append_pair("select", "*");
+                            qp.append_pair("project_id", &format!("eq.{pid}"));
+                            qp.append_pair("order", "number.asc");
+                        }
+                        let sresp = client
+                            .get(surl.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
+                        let sprints: serde_json::Value =
+                            serde_json::from_str(&sresp.text().await.unwrap_or_default())
+                                .unwrap_or_else(|_| serde_json::json!([]));
 
-                        let mut murl = url::Url::parse(&format!("{base}/rest/v1/project_members")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=murl.query_pairs_mut(); qp.append_pair("select","*,user:users(id,first_name,last_name,email,avatar_url)"); qp.append_pair("project_id", &format!("eq.{pid}")); }
-                        let mresp = client.get(murl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
-                        let members: serde_json::Value = serde_json::from_str(&mresp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
+                        let mut murl = url::Url::parse(&format!("{base}/rest/v1/project_members"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = murl.query_pairs_mut();
+                            qp.append_pair(
+                                "select",
+                                "*,user:users(id,first_name,last_name,email,avatar_url)",
+                            );
+                            qp.append_pair("project_id", &format!("eq.{pid}"));
+                        }
+                        let mresp = client
+                            .get(murl.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
+                        let members: serde_json::Value =
+                            serde_json::from_str(&mresp.text().await.unwrap_or_default())
+                                .unwrap_or_else(|_| serde_json::json!([]));
 
-                        let uid = ctx.actor.as_ref().map(|a| a.user_id.clone()).unwrap_or_default();
+                        let uid = ctx
+                            .actor
+                            .as_ref()
+                            .map(|a| a.user_id.clone())
+                            .unwrap_or_default();
                         let mut user_role = "viewer".to_string();
-                        if let Some(arr) = members.as_array() { for m in arr { if m.get("user_id").and_then(|v| v.as_str())==Some(uid.as_str()) { user_role = m.get("role").and_then(|v| v.as_str()).unwrap_or("viewer").to_string(); break; } } }
+                        if let Some(arr) = members.as_array() {
+                            for m in arr {
+                                if m.get("user_id").and_then(|v| v.as_str()) == Some(uid.as_str()) {
+                                    user_role = m
+                                        .get("role")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("viewer")
+                                        .to_string();
+                                    break;
+                                }
+                            }
+                        }
                         let can_manage = user_role == "lead";
                         let can_contrib = user_role == "lead" || user_role == "contributor";
                         let perms = serde_json::json!({
@@ -901,31 +1029,94 @@ impl ToolRouter {
                         Ok(ToolOk { status: Some(200), data: serde_json::json!({"project": project, "tasks": [], "sprints": sprints, "members": members, "user_role": user_role, "permissions": perms}).to_string() })
                     }
                     "list_teams" => {
-                        let mut url = url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=url.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("org_id", &format!("eq.{org_id}")); qp.append_pair("order","name.asc"); }
-                        let resp = client.get(url.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
+                        let mut url = url::Url::parse(&format!("{base}/rest/v1/teams"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = url.query_pairs_mut();
+                            qp.append_pair("select", "*");
+                            qp.append_pair("org_id", &format!("eq.{org_id}"));
+                            qp.append_pair("order", "name.asc");
+                        }
+                        let resp = client
+                            .get(url.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
                         let status = resp.status().as_u16();
                         let text = resp.text().await.unwrap_or_default();
-                        if !(200..300).contains(&status) { return Ok(ToolOk { status: Some(status), data: text }); }
-                        let teams: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
-                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"teams": teams}).to_string() })
+                        if !(200..300).contains(&status) {
+                            return Ok(ToolOk {
+                                status: Some(status),
+                                data: text,
+                            });
+                        }
+                        let teams: serde_json::Value =
+                            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk {
+                            status: Some(200),
+                            data: serde_json::json!({"teams": teams}).to_string(),
+                        })
                     }
                     "get_team" => {
                         let tid = id.unwrap_or_default();
-                        let mut turl = url::Url::parse(&format!("{base}/rest/v1/teams")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=turl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("id", &format!("eq.{tid}")); qp.append_pair("limit","1"); }
-                        let tresp = client.get(turl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
-                        if !tresp.status().is_success() { return Ok(ToolOk { status: Some(tresp.status().as_u16()), data: tresp.text().await.unwrap_or_default() }); }
-                        let trows: Vec<serde_json::Value> = serde_json::from_str(&tresp.text().await.unwrap_or_default()).unwrap_or_default();
-                        if trows.is_empty() { return Ok(ToolOk { status: Some(404), data: serde_json::json!({"error":"Team not found"}).to_string()}); }
+                        let mut turl = url::Url::parse(&format!("{base}/rest/v1/teams"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = turl.query_pairs_mut();
+                            qp.append_pair("select", "*");
+                            qp.append_pair("id", &format!("eq.{tid}"));
+                            qp.append_pair("limit", "1");
+                        }
+                        let tresp = client
+                            .get(turl.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
+                        if !tresp.status().is_success() {
+                            return Ok(ToolOk {
+                                status: Some(tresp.status().as_u16()),
+                                data: tresp.text().await.unwrap_or_default(),
+                            });
+                        }
+                        let trows: Vec<serde_json::Value> =
+                            serde_json::from_str(&tresp.text().await.unwrap_or_default())
+                                .unwrap_or_default();
+                        if trows.is_empty() {
+                            return Ok(ToolOk {
+                                status: Some(404),
+                                data: serde_json::json!({"error":"Team not found"}).to_string(),
+                            });
+                        }
                         let team = trows[0].clone();
-                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects")).map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
-                        { let mut qp=purl.query_pairs_mut(); qp.append_pair("select","*"); qp.append_pair("team_id", &format!("eq.{tid}")); qp.append_pair("order","name.asc"); }
-                        let presp = client.get(purl.as_str()).header("apikey", &key).header("Authorization", format!("Bearer {key}")).send().await?;
-                        let projects: serde_json::Value = serde_json::from_str(&presp.text().await.unwrap_or_default()).unwrap_or_else(|_| serde_json::json!([]));
-                        Ok(ToolOk { status: Some(200), data: serde_json::json!({"team": team, "projects": projects}).to_string() })
+                        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects"))
+                            .map_err(|e| EgressError::InvalidUrl(e.to_string()))?;
+                        {
+                            let mut qp = purl.query_pairs_mut();
+                            qp.append_pair("select", "*");
+                            qp.append_pair("team_id", &format!("eq.{tid}"));
+                            qp.append_pair("order", "name.asc");
+                        }
+                        let presp = client
+                            .get(purl.as_str())
+                            .header("apikey", &key)
+                            .header("Authorization", format!("Bearer {key}"))
+                            .send()
+                            .await?;
+                        let projects: serde_json::Value =
+                            serde_json::from_str(&presp.text().await.unwrap_or_default())
+                                .unwrap_or_else(|_| serde_json::json!([]));
+                        Ok(ToolOk {
+                            status: Some(200),
+                            data: serde_json::json!({"team": team, "projects": projects})
+                                .to_string(),
+                        })
                     }
-                    _ => Ok(ToolOk { status: Some(400), data: serde_json::json!({"error":"unsupported overview kind"}).to_string() }),
+                    _ => Ok(ToolOk {
+                        status: Some(400),
+                        data: serde_json::json!({"error":"unsupported overview kind"}).to_string(),
+                    }),
                 }
             }
             ValidatedArgs::PermissionCheck {
@@ -1797,14 +1988,18 @@ fn validate_args(
             })
         }
 
-        "list_projects" => {
-            Ok(ValidatedArgs::ExponentialOverview {
-                kind: "list_projects",
-                id: None,
-                team_id: params.get("teamId").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                include_archived: params.get("includeArchived").and_then(|v| v.as_bool()).unwrap_or(false),
-            })
-        }
+        "list_projects" => Ok(ValidatedArgs::ExponentialOverview {
+            kind: "list_projects",
+            id: None,
+            team_id: params
+                .get("teamId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            include_archived: params
+                .get("includeArchived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        }),
 
         "create_project" => {
             let team_id = params
@@ -1889,7 +2084,10 @@ fn validate_args(
                 .get("projectId")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "missing required param: projectId".to_string())?;
-            let mut url = url::Url::parse(&make_url(&format!("/api/exponential/projects/{project_id}/tasks"))?).unwrap();
+            let mut url = url::Url::parse(&make_url(&format!(
+                "/api/exponential/projects/{project_id}/tasks"
+            ))?)
+            .unwrap();
             {
                 let mut qp = url.query_pairs_mut();
                 if let Some(v) = params.get("limit").and_then(|v| v.as_u64()) {
@@ -3925,5 +4123,113 @@ mod tests {
         let result = h1.await.unwrap();
         assert!(!result.success);
         assert_eq!(result.data, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn timeout_releases_permits_for_next_call() {
+        let mut cfg = ToolRuntimeConfig::builtins();
+        cfg.max_queue = 4;
+        cfg.max_concurrent_global = 1;
+        cfg.tools.insert(
+            "sleep".into(),
+            ToolRuntimeToolConfig {
+                enabled: true,
+                timeout: Duration::from_millis(25),
+                max_concurrent: 1,
+            },
+        );
+        let router = router_with_runtime(cfg);
+
+        let timed_out = router
+            .execute(
+                ToolRequest {
+                    tool: "sleep".into(),
+                    params: serde_json::json!({ "ms": 200 }),
+                },
+                default_ctx(),
+            )
+            .await;
+        assert!(!timed_out.success);
+        assert!(timed_out.data.contains("timeout"));
+
+        let follow_up = router
+            .execute(
+                ToolRequest {
+                    tool: "sleep".into(),
+                    params: serde_json::json!({ "ms": 1 }),
+                },
+                default_ctx(),
+            )
+            .await;
+        assert!(follow_up.success, "follow-up call should run after timeout");
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiter_releases_queue_slot_for_retry() {
+        let mut cfg = ToolRuntimeConfig::builtins();
+        cfg.max_queue = 2;
+        cfg.max_concurrent_global = 1;
+        cfg.queue_timeout = Duration::from_secs(1);
+        cfg.tools.insert(
+            "sleep".into(),
+            ToolRuntimeToolConfig {
+                enabled: true,
+                timeout: Duration::from_secs(2),
+                max_concurrent: 1,
+            },
+        );
+        let router = router_with_runtime(cfg);
+
+        let long_run = {
+            let r = router.clone();
+            tokio::spawn(async move {
+                r.execute(
+                    ToolRequest {
+                        tool: "sleep".into(),
+                        params: serde_json::json!({ "ms": 120 }),
+                    },
+                    default_ctx(),
+                )
+                .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let cancel = CancellationToken::new();
+        let waiter = {
+            let r = router.clone();
+            let mut ctx = default_ctx();
+            ctx.cancel = Some(cancel.clone());
+            tokio::spawn(async move {
+                r.execute(
+                    ToolRequest {
+                        tool: "sleep".into(),
+                        params: serde_json::json!({ "ms": 5 }),
+                    },
+                    ctx,
+                )
+                .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancel.cancel();
+        let cancelled = waiter.await.unwrap();
+        assert!(!cancelled.success);
+        assert_eq!(cancelled.data, "cancelled");
+
+        let _ = long_run.await.unwrap();
+
+        let retry = router
+            .execute(
+                ToolRequest {
+                    tool: "sleep".into(),
+                    params: serde_json::json!({ "ms": 1 }),
+                },
+                default_ctx(),
+            )
+            .await;
+        assert!(retry.success, "retry after cancelled waiter should succeed");
     }
 }

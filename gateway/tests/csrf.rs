@@ -519,3 +519,45 @@ async fn csrf_cookie_has_correct_attributes() {
         "CSRF cookie must NOT be HttpOnly"
     );
 }
+
+#[tokio::test]
+async fn bearer_auth_bypasses_csrf_case_insensitive() {
+    let app = gateway::app(&csrf_config(), None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/some-endpoint")
+                .header("authorization", "bearer test-token")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn csrf_accepts_matching_token_across_multiple_cookie_headers() {
+    let app = gateway::app(&csrf_config(), None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/some-endpoint")
+                .header("content-type", "application/json")
+                .header("cookie", "session=abc")
+                .header("cookie", "csrf_token=tok-123")
+                .header("x-csrf-token", "tok-123")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}

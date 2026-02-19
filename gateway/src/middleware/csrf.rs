@@ -115,7 +115,7 @@ pub async fn csrf_middleware(
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|h| h.trim_start().starts_with("Bearer "))
+            .is_some_and(is_bearer_authorization)
         {
             return Ok(next.run(request).await);
         }
@@ -193,26 +193,36 @@ fn is_state_changing(method: &Method) -> bool {
     )
 }
 
-/// Extract all cookie values by name from the `Cookie` header.
+fn is_bearer_authorization(raw: &str) -> bool {
+    let mut parts = raw.trim().split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some(scheme), Some(token)) => scheme.eq_ignore_ascii_case("bearer") && !token.is_empty(),
+        _ => false,
+    }
+}
+
+/// Extract all cookie values by name from one or more `Cookie` headers.
 fn extract_cookie_values(req: &Request, name: &str) -> Vec<String> {
     req.headers()
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .map(|cookies| {
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|cookies| {
             cookies
                 .split(';')
-                .filter_map(|pair| {
-                    let pair = pair.trim();
-                    let (k, v) = pair.split_once('=')?;
-                    if k.trim() == name {
-                        Some(v.trim().to_owned())
-                    } else {
-                        None
-                    }
-                })
+                .map(str::trim)
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
+        .filter_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            if k.trim() == name {
+                Some(v.trim().to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn extract_cookie_value(req: &Request, name: &str) -> Option<String> {
