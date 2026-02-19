@@ -6185,10 +6185,6 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::patch(greenbooks_patch_vendor).delete(greenbooks_delete_vendor),
         )
         .route(
-            "/api/greenbooks/items",
-            axum::routing::get(greenbooks_list_items),
-        )
-        .route(
             "/api/greenbooks/fiscal-periods",
             axum::routing::get(greenbooks_list_fiscal_periods),
         )
