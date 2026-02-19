@@ -217,6 +217,16 @@ async fn proxy_greenspot(
     .await
 }
 
+async fn proxy_greenbooks_direct(
+    State(state): State<ApiProxyState>,
+    headers: axum::http::HeaderMap,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    let upstream_path = request.uri().path().to_string();
+    proxy_api_path(state, upstream_path, headers, request_id, request).await
+}
+
 const GREENBOOKS_DEFAULT_ORG_ID: &str = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
 const GREENBOOKS_ACCOUNT_TYPES: &[&str] = &["asset", "liability", "equity", "revenue", "expense"];
 const GREENBOOKS_INVOICE_STATUSES: &[&str] =
@@ -5668,9 +5678,116 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             "/api/greenbooks/bank-accounts/transfer",
             axum::routing::post(greenbooks_bank_transfer),
         )
+        // Explicit GreenBooks passthrough routes (Rust gateway owned; no catch-all wildcard)
         .route(
-            "/api/greenbooks/{*path}",
-            axum::routing::any(proxy_greenbooks).with_state(proxy_state.clone()),
+            "/api/greenbooks/reports",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/import/quickbooks",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/accounts/export",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/accounts/import",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/accounts/{id}/ledger",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/accounts/{id}",
+            axum::routing::patch(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/accounts",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/journal-entries",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/journal-entries/{id}",
+            axum::routing::get(proxy_greenbooks_direct)
+                .patch(proxy_greenbooks_direct)
+                .with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/invoices",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/invoices/{id}",
+            axum::routing::patch(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/items",
+            axum::routing::post(proxy_greenbooks_direct)
+                .patch(proxy_greenbooks_direct)
+                .with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bank-accounts",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bank-accounts/{id}/transactions",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bills",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bills/{id}",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bills/{id}/post-gl",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/bills/{id}/payments",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/customers/{id}",
+            axum::routing::delete(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/customers/{id}/hub",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/customers/{id}/statement",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/fiscal-periods",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/fiscal-periods/{id}",
+            axum::routing::patch(proxy_greenbooks_direct)
+                .delete(proxy_greenbooks_direct)
+                .with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/fx-rates",
+            axum::routing::post(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/fx-rates/{id}",
+            axum::routing::delete(proxy_greenbooks_direct).with_state(proxy_state.clone()),
+        )
+        .route(
+            "/api/greenbooks/fx-rates/convert",
+            axum::routing::any(proxy_greenbooks_direct).with_state(proxy_state.clone()),
         )
         .route(
             "/api/greenspot/{*path}",
