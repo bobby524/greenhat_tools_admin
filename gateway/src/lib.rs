@@ -3546,6 +3546,269 @@ async fn module_access_middleware(req: Request, next: axum_mw::Next) -> Result<R
     Ok(next.run(req).await)
 }
 
+#[derive(Deserialize)]
+struct SetUserModuleAccessRequest {
+    modules: Vec<String>,
+}
+
+fn is_admin_principal(principal: &crate::auth::Principal) -> bool {
+    principal.roles.iter().any(|r| r == "admin" || r == "owner")
+}
+
+async fn list_admin_module_access_users(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+) -> Result<Response, AppError> {
+    let Some(axum::extract::Extension(principal)) = principal else {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    };
+    if !is_admin_principal(&principal) {
+        return Ok(standard_error_response(StatusCode::FORBIDDEN, "Forbidden"));
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut users_url = url::Url::parse(&format!("{base}/rest/v1/users"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = users_url.query_pairs_mut();
+        qp.append_pair("select", "id,email,first_name,last_name,role");
+        qp.append_pair("order", "created_at.desc");
+        qp.append_pair("limit", "500");
+    }
+    let users_resp = client
+        .get(users_url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !users_resp.status().is_success() {
+        return Ok((
+            users_resp.status(),
+            Body::from(users_resp.text().await.unwrap_or_default()),
+        )
+            .into_response());
+    }
+    let users: Vec<serde_json::Value> =
+        serde_json::from_str(&users_resp.text().await.unwrap_or_default()).unwrap_or_default();
+
+    let mut grants_url = url::Url::parse(&format!("{base}/rest/v1/user_module_access"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = grants_url.query_pairs_mut();
+        qp.append_pair("select", "user_id,module_key,granted");
+        qp.append_pair(
+            "org_id",
+            &format!(
+                "eq.{}",
+                principal.org_id.as_deref().unwrap_or(EXPONENTIAL_ORG_ID)
+            ),
+        );
+        qp.append_pair("granted", "eq.true");
+    }
+    let grants_resp = client
+        .get(grants_url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let mut grants_by_user: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    if grants_resp.status().is_success() {
+        let grants: Vec<serde_json::Value> =
+            serde_json::from_str(&grants_resp.text().await.unwrap_or_default()).unwrap_or_default();
+        for g in grants.iter() {
+            if let (Some(uid), Some(module_key)) = (
+                g.get("user_id").and_then(|v| v.as_str()),
+                g.get("module_key").and_then(|v| v.as_str()),
+            ) {
+                grants_by_user
+                    .entry(uid.to_string())
+                    .or_default()
+                    .push(module_key.to_string());
+            }
+        }
+    }
+
+    let out: Vec<serde_json::Value> = users
+        .into_iter()
+        .map(|u| {
+            let uid = u
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            serde_json::json!({
+                "id": uid,
+                "email": u.get("email").cloned().unwrap_or(serde_json::Value::Null),
+                "first_name": u.get("first_name").cloned().unwrap_or(serde_json::Value::Null),
+                "last_name": u.get("last_name").cloned().unwrap_or(serde_json::Value::Null),
+                "role": u.get("role").cloned().unwrap_or(serde_json::Value::Null),
+                "modules": grants_by_user.remove(&uid).unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({"users": out})).into_response())
+}
+
+async fn get_admin_module_access_for_user(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(user_id): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(axum::extract::Extension(principal)) = principal else {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    };
+    if !is_admin_principal(&principal) {
+        return Ok(standard_error_response(StatusCode::FORBIDDEN, "Forbidden"));
+    }
+
+    let grants = load_module_access_for_user(
+        principal.org_id.as_deref().unwrap_or(EXPONENTIAL_ORG_ID),
+        &user_id,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({"user_id": user_id, "modules": grants})).into_response())
+}
+
+async fn set_admin_module_access_for_user(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(user_id): Path<String>,
+    axum::Json(payload): axum::Json<SetUserModuleAccessRequest>,
+) -> Result<Response, AppError> {
+    let Some(axum::extract::Extension(principal)) = principal else {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    };
+    if !is_admin_principal(&principal) {
+        return Ok(standard_error_response(StatusCode::FORBIDDEN, "Forbidden"));
+    }
+
+    let requested: std::collections::HashSet<String> = payload.modules.into_iter().collect();
+    let allowed: std::collections::HashSet<String> =
+        MODULE_KEYS.iter().map(|m| m.to_string()).collect();
+    if !requested.iter().all(|m| allowed.contains(m)) {
+        return Ok(standard_error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid module key",
+        ));
+    }
+
+    let org_id = principal
+        .org_id
+        .as_deref()
+        .unwrap_or(EXPONENTIAL_ORG_ID)
+        .to_string();
+    replace_module_access_for_user(&org_id, &user_id, requested.into_iter().collect()).await?;
+
+    Ok(Json(serde_json::json!({"ok": true, "user_id": user_id})).into_response())
+}
+
+async fn load_module_access_for_user(org_id: &str, user_id: &str) -> Result<Vec<String>, AppError> {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(_) => return Ok(vec![]),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/user_module_access"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "module_key");
+        qp.append_pair("org_id", &format!("eq.{org_id}"));
+        qp.append_pair("user_id", &format!("eq.{user_id}"));
+        qp.append_pair("granted", "eq.true");
+    }
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Ok(vec![]);
+    }
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&resp.text().await.unwrap_or_default()).unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            r.get("module_key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect())
+}
+
+async fn replace_module_access_for_user(
+    org_id: &str,
+    user_id: &str,
+    modules: Vec<String>,
+) -> Result<(), AppError> {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut del_url = url::Url::parse(&format!("{base}/rest/v1/user_module_access"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = del_url.query_pairs_mut();
+        qp.append_pair("org_id", &format!("eq.{org_id}"));
+        qp.append_pair("user_id", &format!("eq.{user_id}"));
+    }
+    let del_resp = client
+        .delete(del_url.as_str())
+        .header("Prefer", "return=minimal")
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !del_resp.status().is_success() {
+        return Err(AppError::internal("failed to clear existing module access"));
+    }
+
+    if modules.is_empty() {
+        return Ok(());
+    }
+
+    let rows: Vec<serde_json::Value> = modules
+        .into_iter()
+        .map(|module_key| {
+            serde_json::json!({
+                "org_id": org_id,
+                "user_id": user_id,
+                "module_key": module_key,
+                "granted": true,
+            })
+        })
+        .collect();
+
+    let ins_url = format!("{base}/rest/v1/user_module_access");
+    let ins_resp = client
+        .post(&ins_url)
+        .header("Content-Type", "application/json")
+        .header("Prefer", "return=minimal")
+        .body(serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !ins_resp.status().is_success() {
+        return Err(AppError::internal("failed to insert module access rows"));
+    }
+
+    Ok(())
+}
+
 async fn get_my_module_access(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
 ) -> Result<Response, AppError> {
@@ -6608,6 +6871,15 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/me/module-access",
             axum::routing::get(get_my_module_access),
+        )
+        .route(
+            "/api/admin/module-access/users",
+            axum::routing::get(list_admin_module_access_users),
+        )
+        .route(
+            "/api/admin/module-access/{user_id}",
+            axum::routing::get(get_admin_module_access_for_user)
+                .put(set_admin_module_access_for_user),
         )
         .route(
             "/v1/tools",
