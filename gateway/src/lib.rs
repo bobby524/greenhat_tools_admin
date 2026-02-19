@@ -1658,6 +1658,54 @@ async fn greenbooks_create_vendor(request: Request) -> Response {
     }
 }
 
+async fn greenbooks_delete_vendor(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_vendors")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+    }
+
+    match client
+        .delete(url.as_str())
+        .header("Prefer", "return=representation")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if parse_one::<Value>(&txt).is_some() {
+                    return StatusCode::NO_CONTENT.into_response();
+                }
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error":"Vendor not found"})),
+                )
+                    .into_response();
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": supabase_error_message(&txt)})),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 async fn greenbooks_patch_vendor(Path(id): Path<String>, request: Request) -> Response {
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
@@ -1810,6 +1858,54 @@ async fn greenbooks_create_tax_code(request: Request) -> Response {
                 )
                     .into_response()
             }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn greenbooks_delete_tax_code(Path(id): Path<String>) -> Response {
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_tax_codes")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("id", &format!("eq.{id}"));
+    }
+
+    match client
+        .delete(url.as_str())
+        .header("Prefer", "return=representation")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.text().await.unwrap_or_default();
+            if st.is_success() {
+                if parse_one::<Value>(&txt).is_some() {
+                    return StatusCode::NO_CONTENT.into_response();
+                }
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error":"Tax code not found"})),
+                )
+                    .into_response();
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": supabase_error_message(&txt)})),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5487,7 +5583,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/tax-codes/{id}",
-            axum::routing::patch(greenbooks_patch_tax_code),
+            axum::routing::patch(greenbooks_patch_tax_code).delete(greenbooks_delete_tax_code),
         )
         .route(
             "/api/greenbooks/settings",
@@ -5499,7 +5595,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/greenbooks/vendors/{id}",
-            axum::routing::patch(greenbooks_patch_vendor),
+            axum::routing::patch(greenbooks_patch_vendor).delete(greenbooks_delete_vendor),
         )
         .route(
             "/api/greenbooks/items",
