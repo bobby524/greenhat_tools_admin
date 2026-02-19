@@ -109,23 +109,20 @@ fatal: configuration error — exiting
 
 ---
 
-## Local Quality Gates (Phase 6 hardening)
+## Local Safety Quality Gate (Phase 7 hardening)
 
-Runtime panic regressions are blocked by `scripts/check-runtime-panics.sh`.
-
-Policy summary:
-- Fails on `unwrap(` / `expect(` / `panic!(` in runtime request-path code (`gateway/src/lib.rs` non-test region + `gateway/src/main.rs`).
-- Ignores test-only code under `#[cfg(test)]` blocks.
-- Allows only explicit startup invariants listed in `scripts/runtime-panic-allowlist.txt`.
-
-Run locally before pushing:
+Run the single required gate before pushing:
 
 ```bash
-cargo fmt --all -- --check
-cargo check
-cargo test -p gateway -p mcp-spike
-./scripts/check-runtime-panics.sh
+make safety-gate
+# or: ./scripts/safety-quality-gate.sh
 ```
+
+Gate includes runtime panic guard + fmt + compile checks + tests + key security smoke validations.
+
+Reference docs:
+- `docs/SAFETY_QUALITY_GATE_RUNBOOK.md`
+- `docs/HARDENING_PHASE_SCOREBOARD.md`
 
 ## Architecture
 

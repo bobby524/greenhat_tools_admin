@@ -19,10 +19,10 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
-  # 1. Rust lint + test
+  # 1. Enforceable Safety Quality Gate
   # ------------------------------------------------------------------
-  rust:
-    name: Rust (fmt / clippy / test)
+  safety-quality-gate:
+    name: Safety Quality Gate (panic + fmt + check + tests + smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +37,6 @@ jobs:
         with:
           shared-key: ci-rust
 
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-
       - name: cargo clippy (gateway)
         run: cargo clippy -p gateway --all-targets -- -D warnings
 
@@ -48,11 +45,8 @@ jobs:
       - name: cargo clippy (mcp-spike, advisory)
         run: cargo clippy -p mcp-spike --all-targets 2>&1 || true
 
-      - name: runtime panic guard
-        run: ./scripts/check-runtime-panics.sh
-
-      - name: cargo test
-        run: cargo test -p gateway -p mcp-spike
+      - name: run safety quality gate
+        run: ./scripts/safety-quality-gate.sh
 
   # ------------------------------------------------------------------
   # 2. Docker build (always) + GHCR publish (main only)
@@ -60,7 +54,7 @@ jobs:
   docker:
     name: Docker build & publish
     runs-on: ubuntu-latest
-    needs: rust                         # gate on lint+test
+    needs: safety-quality-gate          # required gate before image publish
     steps:
       - uses: actions/checkout@v4
         with:

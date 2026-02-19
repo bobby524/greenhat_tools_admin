@@ -71,7 +71,7 @@ that has been validated in staging.
 
 ### Step-by-step
 
-1. **Merge PR** — CI runs fmt → clippy → test → Docker build → push to GHCR.
+1. **Merge PR** — CI runs the required **Safety Quality Gate** (panic guard + fmt + check + tests + smoke), then Docker build/push to GHCR.
 2. **Staging auto-deploys** — a webhook / cron / watcher pulls `main` tag.
    (Can be a simple `docker compose pull && docker compose up -d` cron.)
 3. **Validate staging** — smoke tests, integration tests, manual QA.
