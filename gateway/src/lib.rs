@@ -222,6 +222,39 @@ const GREENBOOKS_ACCOUNT_TYPES: &[&str] = &["asset", "liability", "equity", "rev
 const GREENBOOKS_INVOICE_STATUSES: &[&str] =
     &["draft", "sent", "partially_paid", "paid", "overdue", "void"];
 
+fn standard_error_kind(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST => "bad_request",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        StatusCode::FORBIDDEN => "forbidden",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::TOO_MANY_REQUESTS => "rate_limited",
+        StatusCode::BAD_GATEWAY => "upstream_error",
+        StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
+        _ if status.is_server_error() => "internal",
+        _ => "bad_request",
+    }
+}
+
+fn standard_error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    let message = message.into();
+    (
+        status,
+        Json(serde_json::json!({
+            "error": {
+                "code": status.as_u16(),
+                "kind": standard_error_kind(status),
+                "message": message,
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn legacy_error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
+}
+
 fn supabase_error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -240,11 +273,10 @@ fn supabase_error_message(body: &str) -> String {
 
 fn parse_upstream_url_or_500(raw: &str) -> Result<url::Url, Response> {
     url::Url::parse(raw).map_err(|e| {
-        (
+        standard_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("invalid upstream URL: {e}") })),
+            format!("invalid upstream URL: {e}"),
         )
-            .into_response()
     })
 }
 
@@ -252,22 +284,17 @@ async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> R
     let account_type = q.get("type").map(|v| v.trim()).filter(|v| !v.is_empty());
     if let Some(t) = account_type {
         if !GREENBOOKS_ACCOUNT_TYPES.contains(&t) {
-            return (
+            return legacy_error_response(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("Invalid account type: {t}") })),
-            )
-                .into_response();
+                format!("Invalid account type: {t}"),
+            );
         }
     }
 
     let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
     if let Some(ref v) = active {
         if v != "true" && v != "false" {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "active must be true or false" })),
-            )
-                .into_response();
+            return legacy_error_response(StatusCode::BAD_REQUEST, "active must be true or false");
         }
     }
 
@@ -365,11 +392,7 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
     let active = q.get("active").map(|v| v.trim().to_ascii_lowercase());
     if let Some(ref v) = active {
         if v != "true" && v != "false" {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "active must be true or false" })),
-            )
-                .into_response();
+            return legacy_error_response(StatusCode::BAD_REQUEST, "active must be true or false");
         }
     }
     let limit = q
@@ -703,11 +726,7 @@ async fn greenbooks_list_payments(
     Query(q): Query<GreenBooksPaymentsQuery>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -754,11 +773,7 @@ async fn greenbooks_list_invoice_payments(
     Path(id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -803,11 +818,7 @@ async fn greenbooks_post_invoice_to_gl(
     Path(id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -908,11 +919,7 @@ async fn greenbooks_create_invoice_payment(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
@@ -941,11 +948,7 @@ async fn greenbooks_create_invoice_payment(
         .unwrap_or("")
         .to_string();
     if amount <= 0.0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error":"amount must be a positive number"})),
-        )
-            .into_response();
+        return legacy_error_response(StatusCode::BAD_REQUEST, "amount must be a positive number");
     }
     if payment_date.trim().is_empty() {
         return (
@@ -1122,11 +1125,7 @@ async fn greenbooks_reconcile_history(
     Path(id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1164,11 +1163,7 @@ async fn greenbooks_reconcile_post(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
@@ -1277,11 +1272,7 @@ async fn greenbooks_reconcile_patch(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
@@ -1363,11 +1354,7 @@ async fn greenbooks_bank_transfer(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let body = match to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
@@ -1463,11 +1450,7 @@ async fn get_exponential_labels(
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1508,11 +1491,7 @@ async fn create_exponential_label(
     request: Request,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1605,11 +1584,7 @@ async fn delete_exponential_label(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let id = match q.get("id") {
         Some(v) if !v.is_empty() => v.clone(),
@@ -1655,13 +1630,7 @@ async fn get_exponential_views(
 ) -> Response {
     let user_id = match principal {
         Some(axum::extract::Extension(p)) => p.user_id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"Unauthorized"})),
-            )
-                .into_response()
-        }
+        None => return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"),
     };
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1705,13 +1674,7 @@ async fn create_exponential_view(
 ) -> Response {
     let user_id = match principal {
         Some(axum::extract::Extension(p)) => p.user_id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"Unauthorized"})),
-            )
-                .into_response()
-        }
+        None => return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"),
     };
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1805,13 +1768,7 @@ async fn delete_exponential_view(
 ) -> Response {
     let user_id = match principal {
         Some(axum::extract::Extension(p)) => p.user_id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"Unauthorized"})),
-            )
-                .into_response()
-        }
+        None => return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"),
     };
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -1852,11 +1809,7 @@ async fn get_exponential_project_assignees(
     Path(project_id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2397,11 +2350,10 @@ async fn list_exponential_tasks(
         );
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2471,11 +2423,10 @@ async fn create_exponential_task(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let body = body.as_object().cloned().unwrap_or_default();
     let project_id = body
@@ -2565,11 +2516,10 @@ async fn get_exponential_task(
         return Ok(Json(serde_json::Value::Object(payload)).into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2626,11 +2576,10 @@ async fn update_exponential_task(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2706,11 +2655,10 @@ async fn delete_exponential_task(
     Path(task_id): Path<String>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2747,11 +2695,10 @@ async fn list_exponential_sprints(
         return Ok(Json(serde_json::json!({"sprints": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2795,11 +2742,10 @@ async fn create_exponential_sprint(
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let project_id = body
         .get("project_id")
@@ -2887,11 +2833,10 @@ async fn get_exponential_sprint(
         );
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -2952,11 +2897,7 @@ async fn update_exponential_sprint(
     Json(body): Json<Value>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3019,11 +2960,7 @@ async fn delete_exponential_sprint(
     Path(sprint_id): Path<String>,
 ) -> Response {
     if principal.is_none() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response();
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3066,11 +3003,10 @@ async fn list_exponential_projects(
         return Ok(Json(serde_json::json!({"projects": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3204,11 +3140,10 @@ async fn get_exponential_project(
     let principal = match principal {
         Some(axum::extract::Extension(p)) => p,
         None => {
-            return Ok((
+            return Ok(standard_error_response(
                 StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"Unauthorized"})),
-            )
-                .into_response())
+                "Unauthorized",
+            ))
         }
     };
     let (base, key) = match supabase_env() {
@@ -3311,11 +3246,10 @@ async fn list_exponential_teams(
         return Ok(Json(serde_json::json!({"teams": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3364,11 +3298,10 @@ async fn get_exponential_team(
         .into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3438,11 +3371,10 @@ async fn get_exponential_project_tasks(
         );
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3547,11 +3479,10 @@ async fn get_exponential_task_comments(
         return Ok(Json(serde_json::json!({"comments": []})).into_response());
     }
     if principal.is_none() {
-        return Ok((
+        return Ok(standard_error_response(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error":"Unauthorized"})),
-        )
-            .into_response());
+            "Unauthorized",
+        ));
     }
     let (base, key) = match supabase_env() {
         Ok(v) => v,
@@ -3618,13 +3549,7 @@ async fn create_exponential_task_comment(
 ) -> Response {
     let user_id = match principal {
         Some(axum::extract::Extension(p)) => p.user_id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error":"Unauthorized"})),
-            )
-                .into_response()
-        }
+        None => return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"),
     };
     let raw_text = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
     let text = sanitize_rich_html(raw_text).trim().to_string();
@@ -4932,7 +4857,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read_resp.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(body_json(read_resp).await["error"], "Unauthorized");
+        let read_body = body_json(read_resp).await;
+        assert_eq!(read_body["error"]["code"], 401);
+        assert_eq!(read_body["error"]["kind"], "unauthorized");
+        assert_eq!(read_body["error"]["message"], "Unauthorized");
 
         let write_resp = router
             .oneshot(
@@ -4947,7 +4875,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(write_resp.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(body_json(write_resp).await["error"], "Unauthorized");
+        let write_body = body_json(write_resp).await;
+        assert_eq!(write_body["error"]["code"], 401);
+        assert_eq!(write_body["error"]["kind"], "unauthorized");
+        assert_eq!(write_body["error"]["message"], "Unauthorized");
     }
 
     #[tokio::test]
@@ -5008,5 +4939,33 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_json(resp).await;
         assert_eq!(body["error"], "Invalid account type: wat");
+    }
+
+    #[tokio::test]
+    async fn exponential_native_write_auth_uses_standard_error_envelope() {
+        let tool_router =
+            ToolRouter::new(EgressClient::new(crate::egress::EgressConfig::default()));
+        let router = Router::new().route(
+            "/api/exponential/tasks",
+            axum::routing::post(create_exponential_task).with_state(tool_router),
+        );
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/exponential/tasks")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], 401);
+        assert_eq!(body["error"]["kind"], "unauthorized");
+        assert_eq!(body["error"]["message"], "Unauthorized");
     }
 }
