@@ -4331,6 +4331,7 @@ mod tests {
 
     use crate::auth::{AuthMethod, Principal};
     use crate::egress::{EgressClient, EgressConfig};
+    use crate::middleware::csrf::{csrf_middleware, CsrfConfig};
     use crate::middleware::rbac::{rbac_middleware, RbacState};
     use crate::rbac::{Policy, PolicyEngine};
 
@@ -4783,5 +4784,136 @@ mod tests {
                 assert!(body.get(key).and_then(|v| v.as_object()).is_some());
             }
         }
+    }
+
+    fn build_greenbooks_contract_router(principal: Option<Principal>) -> Router {
+        let csrf = CsrfConfig::default();
+        let mut router = Router::new()
+            .route(
+                "/api/greenbooks/accounts",
+                axum::routing::get(greenbooks_list_accounts),
+            )
+            .route(
+                "/api/greenbooks/payments",
+                axum::routing::get(greenbooks_list_payments),
+            )
+            .route(
+                "/api/greenbooks/invoices/{id}/payments",
+                axum::routing::get(greenbooks_list_invoice_payments)
+                    .post(greenbooks_create_invoice_payment),
+            )
+            .route(
+                "/api/greenbooks/bank-accounts/transfer",
+                axum::routing::post(greenbooks_bank_transfer),
+            )
+            .layer(axum_mw::from_fn_with_state(csrf, csrf_middleware));
+
+        if let Some(p) = principal {
+            router = router.layer(axum_mw::from_fn(
+                move |mut req: Request<Body>, next: Next| {
+                    let p = p.clone();
+                    async move {
+                        req.extensions_mut().insert(p);
+                        next.run(req).await
+                    }
+                },
+            ));
+        }
+
+        router
+    }
+
+    #[tokio::test]
+    async fn greenbooks_rust_routes_require_principal_for_migrated_reads_and_writes() {
+        let router = build_greenbooks_contract_router(None);
+
+        let read_resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/greenbooks/payments")
+                    .header("authorization", "Bearer test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read_resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(read_resp).await["error"], "Unauthorized");
+
+        let write_resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/greenbooks/invoices/inv_123/payments")
+                    .header("authorization", "Bearer test")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(write_resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(write_resp).await["error"], "Unauthorized");
+    }
+
+    #[tokio::test]
+    async fn greenbooks_write_routes_enforce_csrf_error_envelope_for_cookie_auth() {
+        let router = build_greenbooks_contract_router(Some(test_principal()));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/greenbooks/bank-accounts/transfer")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["kind"], "forbidden");
+        assert_eq!(body["error"]["message"], "CSRF token missing or invalid");
+    }
+
+    #[tokio::test]
+    async fn greenbooks_write_validation_contract_uses_legacy_error_shape_when_authed() {
+        let router = build_greenbooks_contract_router(Some(test_principal()));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/greenbooks/invoices/inv_123/payments")
+                    .header("authorization", "Bearer test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"payment_date":"2026-02-18"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "amount must be a positive number");
+    }
+
+    #[tokio::test]
+    async fn greenbooks_read_validation_contract_is_deterministic() {
+        let router = build_greenbooks_contract_router(Some(test_principal()));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/greenbooks/accounts?type=wat")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"], "Invalid account type: wat");
     }
 }
