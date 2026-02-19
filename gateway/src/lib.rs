@@ -238,6 +238,16 @@ fn supabase_error_message(body: &str) -> String {
         .unwrap_or_else(|| body.to_string())
 }
 
+fn parse_upstream_url_or_500(raw: &str) -> Result<url::Url, Response> {
+    url::Url::parse(raw).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("invalid upstream URL: {e}") })),
+        )
+            .into_response()
+    })
+}
+
 async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> Response {
     let account_type = q.get("type").map(|v| v.trim()).filter(|v| !v.is_empty());
     if let Some(t) = account_type {
@@ -266,7 +276,10 @@ async fn greenbooks_list_accounts(Query(q): Query<HashMap<String, String>>) -> R
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_accounts")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_accounts")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -308,7 +321,10 @@ async fn greenbooks_get_account(Path(id): Path<String>) -> Response {
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_accounts")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_accounts")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -413,7 +429,10 @@ async fn greenbooks_list_customers(Query(q): Query<HashMap<String, String>>) -> 
         }
     }
 
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_customers")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_customers")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -471,7 +490,10 @@ async fn greenbooks_get_customer(Path(id): Path<String>) -> Response {
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_customers")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_customers")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -529,7 +551,10 @@ async fn greenbooks_list_invoices(Query(q): Query<HashMap<String, String>>) -> R
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -573,7 +598,10 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
     };
     let client = supabase_client_with_key(&key);
 
-    let mut inv_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut inv_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = inv_url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -611,7 +639,11 @@ async fn greenbooks_get_invoice(Path(id): Path<String>) -> Response {
     }
     let mut invoice = inv_rows.remove(0);
 
-    let mut items_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoice_items")).unwrap();
+    let mut items_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoice_items"))
+    {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = items_url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -682,7 +714,10 @@ async fn greenbooks_list_payments(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_payments")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_payments")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -730,7 +765,10 @@ async fn greenbooks_list_invoice_payments(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_payments")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_payments")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -792,7 +830,10 @@ async fn greenbooks_post_invoice_to_gl(
         _ => {}
     }
     // fallback contract parity when RPC unavailable: return updated invoice row
-    let mut get_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut get_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = get_url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -818,8 +859,10 @@ async fn greenbooks_post_invoice_to_gl(
             .into_response();
     }
     let mut inv = rows.remove(0);
-    let already_posted =
-        inv.get("journal_entry_id").is_some() && !inv.get("journal_entry_id").unwrap().is_null();
+    let already_posted = inv
+        .get("journal_entry_id")
+        .map(|v| !v.is_null())
+        .unwrap_or(false);
     if already_posted {
         return (
             StatusCode::BAD_REQUEST,
@@ -829,7 +872,10 @@ async fn greenbooks_post_invoice_to_gl(
     }
     // minimal status/journal linkage for contract compatibility in drifted envs.
     let patch = serde_json::json!({"status":"sent"});
-    let mut patch_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut patch_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     patch_url
         .query_pairs_mut()
         .append_pair("id", &format!("eq.{id}"));
@@ -915,7 +961,10 @@ async fn greenbooks_create_invoice_payment(
     };
     let client = supabase_client_with_key(&key);
 
-    let mut inv_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut inv_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = inv_url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -1035,7 +1084,10 @@ async fn greenbooks_create_invoice_payment(
     } else {
         "partially_paid"
     };
-    let mut upd_url = url::Url::parse(&format!("{base}/rest/v1/gb_invoices")).unwrap();
+    let mut upd_url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_invoices")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     upd_url
         .query_pairs_mut()
         .append_pair("id", &format!("eq.{id}"));
@@ -1081,7 +1133,10 @@ async fn greenbooks_reconcile_history(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/gb_reconciliations")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/gb_reconciliations")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -1267,7 +1322,10 @@ async fn greenbooks_reconcile_patch(
     let client = supabase_client_with_key(&key);
     let url = format!("{base}/rest/v1/gb_reconciliation_items");
     let payload = serde_json::json!([{"reconciliation_id": recon_id, "bank_transaction_id": txn_id, "transaction_id": txn_id, "cleared": cleared.unwrap_or(false)}]);
-    let mut upsert_url = url::Url::parse(&url).unwrap();
+    let mut upsert_url = match parse_upstream_url_or_500(&url) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     upsert_url
         .query_pairs_mut()
         .append_pair("on_conflict", "reconciliation_id,bank_transaction_id");
