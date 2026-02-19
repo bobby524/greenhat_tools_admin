@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
+use metrics::counter;
 use tower_http::request_id::RequestId;
 
 use crate::audit::{AuditEvent, AuditLog};
@@ -40,7 +41,7 @@ impl RateLimiter {
     /// Try to consume one token for `key`.  Returns `true` if the request is
     /// allowed, `false` if the caller should be throttled.
     pub fn check(&self, key: &str) -> bool {
-        let mut map = self.buckets.lock().expect("rate-limiter lock poisoned");
+        let mut map = lock_buckets_or_recover(&self.buckets);
         let now = Instant::now();
 
         let bucket = map.entry(key.to_owned()).or_insert(TokenBucket {
@@ -64,6 +65,24 @@ impl RateLimiter {
     /// Return the configured RPS limit (for audit payloads).
     pub fn rps(&self) -> f64 {
         self.rps
+    }
+}
+
+fn lock_buckets_or_recover<'a>(
+    buckets: &'a Mutex<HashMap<String, TokenBucket>>,
+) -> MutexGuard<'a, HashMap<String, TokenBucket>> {
+    match buckets.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            counter!(
+                "lock_poison_recoveries_total",
+                "component" => "rate_limiter",
+                "lock" => "buckets"
+            )
+            .increment(1);
+            tracing::error!("rate limiter bucket lock poisoned; recovering with inner state");
+            poisoned.into_inner()
+        }
     }
 }
 
@@ -96,11 +115,12 @@ pub async fn rate_limit_middleware(
     let path = request.uri().path().to_owned();
     let key = extract_principal_key(&request, &ip, &path);
 
-    let (limiter, layer) = if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
-        (&state.read_limiter, "read")
-    } else {
-        (&state.write_limiter, "write")
-    };
+    let (limiter, layer) =
+        if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+            (&state.read_limiter, "read")
+        } else {
+            (&state.write_limiter, "write")
+        };
 
     if !limiter.check(&key) {
         tracing::warn!(client_ip = %ip, rate_key = %key, path = %path, layer = %layer, "rate limit exceeded");
@@ -150,17 +170,14 @@ fn extract_principal_key(req: &Request, ip: &str, path: &str) -> String {
 }
 
 fn extract_session_cookie(cookie_header: &str) -> Option<&str> {
-    cookie_header
-        .split(';')
-        .map(|p| p.trim())
-        .find_map(|part| {
-            let (name, value) = part.split_once('=')?;
-            if name == "better-auth.session_token" || name == "__Secure-better-auth.session_token" {
-                Some(value)
-            } else {
-                None
-            }
-        })
+    cookie_header.split(';').map(|p| p.trim()).find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        if name == "better-auth.session_token" || name == "__Secure-better-auth.session_token" {
+            Some(value)
+        } else {
+            None
+        }
+    })
 }
 
 fn hash_str(input: &str) -> String {
@@ -219,4 +236,24 @@ fn extract_client_ip(req: &Request) -> String {
     }
 
     "unknown".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn rate_limiter_recovers_after_poisoned_lock() {
+        let limiter = RateLimiter::new(50.0, 3);
+        let poisoned = limiter.clone();
+
+        let _ = thread::spawn(move || {
+            let _guard = poisoned.buckets.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        assert!(limiter.check("ip:127.0.0.1:other"));
+    }
 }

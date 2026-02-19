@@ -12,7 +12,9 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use metrics::counter;
 
 use super::event::AuditEvent;
 
@@ -71,6 +73,22 @@ impl FileSink {
             .append(true)
             .open(&self.path)
     }
+
+    fn writer_guard_or_recover(&self) -> MutexGuard<'_, Option<std::fs::File>> {
+        match self.writer.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                counter!(
+                    "lock_poison_recoveries_total",
+                    "component" => "audit_file_sink",
+                    "lock" => "writer"
+                )
+                .increment(1);
+                tracing::error!(path = %self.path.display(), "audit file sink lock poisoned; recovering with inner state");
+                poisoned.into_inner()
+            }
+        }
+    }
 }
 
 impl AuditSink for FileSink {
@@ -80,10 +98,7 @@ impl AuditSink for FileSink {
             Err(_) => return,
         };
 
-        let mut guard = match self.writer.lock() {
-            Ok(g) => g,
-            Err(_) => return, // poisoned — skip silently
-        };
+        let mut guard = self.writer_guard_or_recover();
 
         // Lazy-open on first write.
         if guard.is_none() {
@@ -221,6 +236,34 @@ pub mod tests {
         assert!(content.contains("r3"));
 
         // Cleanup
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn file_sink_recovers_after_poisoned_lock() {
+        use std::thread;
+
+        let dir = std::env::temp_dir().join("audit_sink_poison_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let sink = Arc::new(FileSink::new(&path));
+        let poisoned = sink.clone();
+
+        let _ = thread::spawn(move || {
+            let _guard = poisoned.writer.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        let evt = AuditEvent::new("test.file.poison", "r4", "10.0.0.3", None, json!({}));
+        sink.emit(&evt);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("test.file.poison"));
+
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
     }

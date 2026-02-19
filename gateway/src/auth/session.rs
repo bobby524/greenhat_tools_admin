@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use metrics::counter;
 use serde::Deserialize;
 
 use super::principal::{AuthMethod, Principal};
@@ -179,6 +180,50 @@ impl BetterAuthClient {
             cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    fn cache_get(&self, cache_key: &str) -> Option<(Instant, Principal)> {
+        match self.cache.lock() {
+            Ok(cache) => cache.get(cache_key).cloned(),
+            Err(poisoned) => {
+                counter!(
+                    "lock_poison_recoveries_total",
+                    "component" => "session_cache",
+                    "lock" => "cache"
+                )
+                .increment(1);
+                tracing::error!("session cache lock poisoned on read; using recovered inner state");
+                poisoned.into_inner().get(cache_key).cloned()
+            }
+        }
+    }
+
+    fn cache_insert(&self, cache_key: String, principal: Principal) {
+        let mut cache = match self.cache.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => {
+                counter!(
+                    "lock_poison_recoveries_total",
+                    "component" => "session_cache",
+                    "lock" => "cache"
+                )
+                .increment(1);
+                tracing::error!(
+                    "session cache lock poisoned on write; using recovered inner state"
+                );
+                poisoned.into_inner()
+            }
+        };
+
+        if cache.len() > 10_000 {
+            counter!(
+                "session_cache_evictions_total",
+                "reason" => "max_size"
+            )
+            .increment(1);
+            cache.clear();
+        }
+        cache.insert(cache_key, (Instant::now(), principal));
+    }
 }
 
 #[async_trait]
@@ -235,14 +280,12 @@ impl SessionValidator for BetterAuthClient {
 
                 cache_key = format!("cookie:{}", token_val);
 
-                if let Ok(cache) = self.cache.lock() {
-                    if let Some((ts, principal)) = cache.get(&cache_key) {
-                        if ts.elapsed() < Duration::from_secs(20) {
-                            return Ok(principal.clone());
-                        }
-                        if ts.elapsed() < Duration::from_secs(600) {
-                            stale_fallback = Some(principal.clone());
-                        }
+                if let Some((ts, principal)) = self.cache_get(&cache_key) {
+                    if ts.elapsed() < Duration::from_secs(20) {
+                        return Ok(principal);
+                    }
+                    if ts.elapsed() < Duration::from_secs(600) {
+                        stale_fallback = Some(principal);
                     }
                 }
 
@@ -250,14 +293,12 @@ impl SessionValidator for BetterAuthClient {
             }
             SessionCredential::Bearer(token) => {
                 cache_key = format!("bearer:{}", token);
-                if let Ok(cache) = self.cache.lock() {
-                    if let Some((ts, principal)) = cache.get(&cache_key) {
-                        if ts.elapsed() < Duration::from_secs(20) {
-                            return Ok(principal.clone());
-                        }
-                        if ts.elapsed() < Duration::from_secs(600) {
-                            stale_fallback = Some(principal.clone());
-                        }
+                if let Some((ts, principal)) = self.cache_get(&cache_key) {
+                    if ts.elapsed() < Duration::from_secs(20) {
+                        return Ok(principal);
+                    }
+                    if ts.elapsed() < Duration::from_secs(600) {
+                        stale_fallback = Some(principal);
                     }
                 }
                 req = req.header("authorization", format!("Bearer {token}"));
@@ -326,12 +367,7 @@ impl SessionValidator for BetterAuthClient {
             auth_method,
         };
 
-        if let Ok(mut cache) = self.cache.lock() {
-            if cache.len() > 10_000 {
-                cache.clear();
-            }
-            cache.insert(cache_key, (Instant::now(), principal.clone()));
-        }
+        self.cache_insert(cache_key, principal.clone());
 
         Ok(principal)
     }
@@ -406,5 +442,60 @@ impl SessionValidator for AlwaysInvalidValidator {
         _credential: &SessionCredential,
     ) -> Result<Principal, AuthError> {
         Err(AuthError::InvalidSession("mock: always invalid".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    fn sample_principal() -> Principal {
+        Principal {
+            user_id: "u1".into(),
+            org_id: None,
+            roles: vec![],
+            session_id: "s1".into(),
+            auth_method: AuthMethod::Cookie,
+        }
+    }
+
+    #[test]
+    fn session_cache_read_recovers_after_poison() {
+        let client = BetterAuthClient::new(
+            "http://localhost:3000",
+            Duration::from_millis(100),
+            "better-auth.session_token",
+        );
+        client.cache_insert("cookie:t1".into(), sample_principal());
+
+        let poisoned_cache = client.cache.clone();
+        let _ = thread::spawn(move || {
+            let _guard = poisoned_cache.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        let found = client.cache_get("cookie:t1");
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn session_cache_write_recovers_after_poison() {
+        let client = BetterAuthClient::new(
+            "http://localhost:3000",
+            Duration::from_millis(100),
+            "better-auth.session_token",
+        );
+
+        let poisoned_cache = client.cache.clone();
+        let _ = thread::spawn(move || {
+            let _guard = poisoned_cache.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        client.cache_insert("cookie:t2".into(), sample_principal());
+        assert!(client.cache_get("cookie:t2").is_some());
     }
 }
