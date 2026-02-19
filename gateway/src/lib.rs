@@ -5295,8 +5295,46 @@ async fn list_exponential_teams(
     if !st.is_success() {
         return Ok((st, Body::from(txt)).into_response());
     }
-    let teams: serde_json::Value =
-        serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+    let mut teams: Vec<serde_json::Value> =
+        serde_json::from_str(&txt).unwrap_or_else(|_| Vec::new());
+
+    // Teams page expects non-archived project counts per team.
+    if !matches!(query.view.as_deref(), Some("sidebar")) {
+        let mut purl = url::Url::parse(&format!("{base}/rest/v1/projects"))
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        {
+            let mut pqp = purl.query_pairs_mut();
+            pqp.append_pair("select", "team_id");
+            pqp.append_pair("org_id", &format!("eq.{EXPONENTIAL_ORG_ID}"));
+            pqp.append_pair("archived_at", "is.null");
+        }
+        let presp = client
+            .get(purl.as_str())
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        if presp.status().is_success() {
+            let ptxt = presp.text().await.unwrap_or_default();
+            let projects: Vec<serde_json::Value> =
+                serde_json::from_str(&ptxt).unwrap_or_else(|_| Vec::new());
+            let mut counts: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            for p in projects.iter() {
+                if let Some(team_id) = p.get("team_id").and_then(|v| v.as_str()) {
+                    *counts.entry(team_id.to_string()).or_insert(0) += 1;
+                }
+            }
+            for team in teams.iter_mut() {
+                if let Some(team_id) = team.get("id").and_then(|v| v.as_str()) {
+                    let c = counts.get(team_id).copied().unwrap_or(0);
+                    if let Some(obj) = team.as_object_mut() {
+                        obj.insert("project_count".to_string(), serde_json::json!(c));
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({"teams": teams})).into_response())
 }
 
