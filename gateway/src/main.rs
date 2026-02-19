@@ -56,7 +56,13 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!(%addr, service = SERVICE_NAME, version = VERSION, "starting gateway");
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, %addr, "failed to bind gateway listener");
+            return;
+        }
+    };
 
     // Graceful shutdown
     let shutdown = async {
@@ -65,8 +71,10 @@ async fn main() {
         // _telemetry_guard will be dropped after serve returns, flushing OTel
     };
 
-    axum::serve(listener, router)
+    if let Err(e) = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await
-        .unwrap();
+    {
+        tracing::error!(error = %e, "gateway server exited with error");
+    }
 }

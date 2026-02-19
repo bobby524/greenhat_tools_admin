@@ -1474,7 +1474,10 @@ async fn get_exponential_labels(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/labels")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -1623,7 +1626,10 @@ async fn delete_exponential_label(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/labels")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/labels")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     url.query_pairs_mut().append_pair("id", &format!("eq.{id}"));
     match client.delete(url.as_str()).send().await {
         Ok(resp) => {
@@ -1662,7 +1668,11 @@ async fn get_exponential_views(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    let mut url =
+        match parse_upstream_url_or_500(&format!("{base}/rest/v1/exponential_saved_views")) {
+            Ok(u) => u,
+            Err(r) => return r,
+        };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("select", "*");
@@ -1749,7 +1759,11 @@ async fn create_exponential_view(
         "sort_dir": parsed.get("sort_dir").and_then(|v| v.as_str()).unwrap_or("desc"),
     }]);
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    let mut url =
+        match parse_upstream_url_or_500(&format!("{base}/rest/v1/exponential_saved_views")) {
+            Ok(u) => u,
+            Err(r) => return r,
+        };
     url.query_pairs_mut()
         .append_pair("on_conflict", "org_id,user_id,name");
     match client
@@ -1804,7 +1818,11 @@ async fn delete_exponential_view(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/exponential_saved_views")).unwrap();
+    let mut url =
+        match parse_upstream_url_or_500(&format!("{base}/rest/v1/exponential_saved_views")) {
+            Ok(u) => u,
+            Err(r) => return r,
+        };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("id", &format!("eq.{view_id}"));
@@ -1845,7 +1863,11 @@ async fn get_exponential_project_assignees(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/project_assignees_view")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/project_assignees_view"))
+    {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair(
@@ -2954,7 +2976,10 @@ async fn update_exponential_sprint(
         )
             .into_response();
     }
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/sprints")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     url.query_pairs_mut()
         .append_pair("id", &format!("eq.{sprint_id}"));
     let resp = match client
@@ -3005,7 +3030,10 @@ async fn delete_exponential_sprint(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut url = url::Url::parse(&format!("{base}/rest/v1/sprints")).unwrap();
+    let mut url = match parse_upstream_url_or_500(&format!("{base}/rest/v1/sprints")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     url.query_pairs_mut()
         .append_pair("id", &format!("eq.{sprint_id}"));
     let resp = match client.delete(url.as_str()).send().await {
@@ -3612,7 +3640,10 @@ async fn create_exponential_task_comment(
         Err(r) => return r,
     };
     let client = supabase_client_with_key(&key);
-    let mut turl = url::Url::parse(&format!("{base}/rest/v1/tasks")).unwrap();
+    let mut turl = match parse_upstream_url_or_500(&format!("{base}/rest/v1/tasks")) {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     {
         let mut qp = turl.query_pairs_mut();
         qp.append_pair("select", "org_id");
@@ -4311,15 +4342,22 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         audit: audit.clone(),
     };
 
+    let allowed_origins: Vec<HeaderValue> = [
+        "https://tools.greenhatsec.com",
+        "https://admin.greenhatsec.com",
+    ]
+    .iter()
+    .filter_map(|origin| match origin.parse::<HeaderValue>() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::error!(origin = %origin, error = %e, "invalid CORS allow origin configured");
+            None
+        }
+    })
+    .collect();
+
     let cors = CorsLayer::new()
-        .allow_origin([
-            "https://tools.greenhatsec.com"
-                .parse::<HeaderValue>()
-                .expect("valid tools origin"),
-            "https://admin.greenhatsec.com"
-                .parse::<HeaderValue>()
-                .expect("valid admin origin"),
-        ])
+        .allow_origin(allowed_origins)
         .allow_methods([
             Method::GET,
             Method::POST,
