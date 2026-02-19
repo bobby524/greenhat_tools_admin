@@ -3425,6 +3425,157 @@ async fn greenbooks_bank_transfer(
 
 const EXPONENTIAL_ORG_ID: &str = "cd861b76-f85c-4afc-b3e8-8f85945c3132";
 
+const MODULE_KEYS: &[&str] = &[
+    "exponential",
+    "greenbooks",
+    "greenspot",
+    "marketing",
+    "soc2",
+    "security",
+    "tools",
+];
+
+fn module_key_for_path(path: &str) -> Option<&'static str> {
+    if path.starts_with("/api/exponential") {
+        Some("exponential")
+    } else if path.starts_with("/api/greenbooks") {
+        Some("greenbooks")
+    } else if path.starts_with("/api/greenspot") {
+        Some("greenspot")
+    } else if path.starts_with("/api/marketing") {
+        Some("marketing")
+    } else if path.starts_with("/api/soc2") {
+        Some("soc2")
+    } else if path.starts_with("/api/security") {
+        Some("security")
+    } else if path.starts_with("/api/pdf-")
+        || path.starts_with("/api/image-to-pdf")
+        || path.starts_with("/api/prd-generator")
+    {
+        Some("tools")
+    } else {
+        None
+    }
+}
+
+async fn load_module_access_for_principal(
+    principal: &crate::auth::Principal,
+) -> Result<Option<std::collections::HashSet<String>>, AppError> {
+    if principal.roles.iter().any(|r| r == "admin" || r == "owner") {
+        return Ok(None); // None = full access
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let client = supabase_client_with_key(&key);
+    let mut url = url::Url::parse(&format!("{base}/rest/v1/user_module_access"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("select", "module_key");
+        qp.append_pair("user_id", &format!("eq.{}", principal.user_id));
+        qp.append_pair("granted", "eq.true");
+        let org_id = principal.org_id.as_deref().unwrap_or(EXPONENTIAL_ORG_ID);
+        qp.append_pair("org_id", &format!("eq.{org_id}"));
+    }
+
+    let resp = client
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // Table missing or not provisioned yet -> fail open for backward compatibility.
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if status == StatusCode::NOT_FOUND || body.contains("user_module_access") {
+            tracing::warn!(status = %status, "user_module_access not ready; module RBAC fallback allow");
+            return Ok(None);
+        }
+        return Err(AppError::internal(format!(
+            "failed to load module access (status {status})"
+        )));
+    }
+
+    let txt = resp.text().await.unwrap_or_default();
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    if rows.is_empty() {
+        return Ok(None); // no grants configured => full access for now
+    }
+
+    let mut set = std::collections::HashSet::new();
+    for r in rows.iter() {
+        if let Some(k) = r.get("module_key").and_then(|v| v.as_str()) {
+            set.insert(k.to_string());
+        }
+    }
+    Ok(Some(set))
+}
+
+async fn module_access_middleware(req: Request, next: axum_mw::Next) -> Result<Response, AppError> {
+    let path = req.uri().path().to_string();
+    if path == "/health"
+        || path == "/version"
+        || path == "/metrics"
+        || path == "/api/me/module-access"
+    {
+        return Ok(next.run(req).await);
+    }
+
+    let Some(module_key) = module_key_for_path(&path) else {
+        return Ok(next.run(req).await);
+    };
+
+    let principal = req.extensions().get::<crate::auth::Principal>().cloned();
+    let Some(principal) = principal else {
+        return Ok(next.run(req).await);
+    };
+
+    let grants = load_module_access_for_principal(&principal).await?;
+    if let Some(grants) = grants {
+        if !grants.contains(module_key) {
+            return Err(AppError::forbidden(format!(
+                "module '{module_key}' access denied"
+            )));
+        }
+    }
+
+    Ok(next.run(req).await)
+}
+
+async fn get_my_module_access(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+) -> Result<Response, AppError> {
+    if cfg!(test) {
+        return Ok(
+            Json(serde_json::json!({"modules": ["*"], "restricted": false})).into_response(),
+        );
+    }
+    let Some(axum::extract::Extension(principal)) = principal else {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    };
+
+    let grants = load_module_access_for_principal(&principal).await?;
+    let payload = if let Some(grants) = grants {
+        let modules: Vec<String> = MODULE_KEYS
+            .iter()
+            .filter(|k| grants.contains(**k))
+            .map(|k| k.to_string())
+            .collect();
+        serde_json::json!({"modules": modules, "restricted": true})
+    } else {
+        serde_json::json!({"modules": ["*"], "restricted": false})
+    };
+
+    Ok(Json(payload).into_response())
+}
+
 fn supabase_env() -> Result<(String, String), Response> {
     let base = std::env::var("SUPABASE_URL")
         .ok()
@@ -6455,6 +6606,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(mcp_dashboard).with_state(tool_router.clone()),
         )
         .route(
+            "/api/me/module-access",
+            axum::routing::get(get_my_module_access),
+        )
+        .route(
             "/v1/tools",
             axum::routing::get(list_tools).with_state(tool_router.clone()),
         )
@@ -6514,6 +6669,7 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             AuthState::with_cookie_name(validator, config.betterauth_cookie_name.clone())
                 .with_audit(audit.clone());
         router = router.layer(axum_mw::from_fn_with_state(auth_state, auth_middleware));
+        router = router.layer(axum_mw::from_fn(module_access_middleware));
     }
 
     let rate_state = crate::middleware::rate_limit::RateLimitState {
