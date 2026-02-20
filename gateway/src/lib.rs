@@ -6802,6 +6802,77 @@ async fn list_exponential_teams(
     Ok(Json(serde_json::json!({"teams": teams})).into_response())
 }
 
+async fn create_exponential_team(
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    if principal.is_none() {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    }
+
+    let body = body.as_object().cloned().unwrap_or_default();
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let slug = body
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if name.is_empty() || slug.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"name and slug are required"})),
+        )
+            .into_response());
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let payload = serde_json::json!([{
+      "org_id": EXPONENTIAL_ORG_ID,
+      "name": name,
+      "slug": slug,
+      "color": body.get("color").and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()).unwrap_or("#ef4444")
+    }]);
+
+    let resp = client
+        .post(format!("{base}/rest/v1/teams"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let team = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"team": team}))).into_response())
+}
+
 async fn get_exponential_team(
     State(_router): State<ToolRouter>,
     _headers: axum::http::HeaderMap,
@@ -7673,7 +7744,9 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/teams",
-            axum::routing::get(list_exponential_teams).with_state(tool_router.clone()),
+            axum::routing::get(list_exponential_teams)
+                .post(create_exponential_team)
+                .with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/teams/{team_id}",
@@ -8261,7 +8334,9 @@ mod tests {
             )
             .route(
                 "/api/exponential/teams",
-                get(list_exponential_teams).with_state(tool_router.clone()),
+                get(list_exponential_teams)
+                    .post(create_exponential_team)
+                    .with_state(tool_router.clone()),
             )
             .route(
                 "/api/exponential/teams/{team_id}",
