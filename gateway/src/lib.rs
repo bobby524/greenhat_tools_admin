@@ -7068,6 +7068,64 @@ async fn get_exponential_project_members(
     Ok(execute_exponential_tool(router, ctx, "get_project_members", params).await)
 }
 
+async fn create_exponential_project_member(
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(project_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    if principal.is_none() {
+        return Ok(standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"));
+    }
+    let user_id = body
+        .get("user_id")
+        .or_else(|| body.get("userId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let role = body
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("contributor")
+        .trim()
+        .to_string();
+    if user_id.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"user_id is required"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let payload = serde_json::json!([{
+        "org_id": EXPONENTIAL_ORG_ID,
+        "project_id": project_id,
+        "user_id": user_id,
+        "role": role
+    }]);
+    let url = format!("{base}/rest/v1/project_members?on_conflict=project_id,user_id");
+    let resp = client
+        .post(url)
+        .header("Prefer", "resolution=merge-duplicates,return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    Ok((StatusCode::CREATED, Body::from(txt)).into_response())
+}
+
 async fn get_exponential_project_permissions(
     State(router): State<ToolRouter>,
     headers: axum::http::HeaderMap,
@@ -7094,6 +7152,64 @@ async fn get_exponential_team_members(
     let ctx = build_tool_audit_ctx(&headers, request_id, principal);
     let params = serde_json::json!({ "teamId": team_id });
     Ok(execute_exponential_tool(router, ctx, "get_team_members", params).await)
+}
+
+async fn create_exponential_team_member(
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    Path(team_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
+    if principal.is_none() {
+        return Ok(standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized"));
+    }
+    let user_id = body
+        .get("user_id")
+        .or_else(|| body.get("userId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let role = body
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("member")
+        .trim()
+        .to_string();
+    if user_id.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"user_id is required"})),
+        )
+            .into_response());
+    }
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+    let payload = serde_json::json!([{
+        "org_id": EXPONENTIAL_ORG_ID,
+        "team_id": team_id,
+        "user_id": user_id,
+        "role": role
+    }]);
+    let url = format!("{base}/rest/v1/team_members?on_conflict=team_id,user_id");
+    let resp = client
+        .post(url)
+        .header("Prefer", "resolution=merge-duplicates,return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+    Ok((StatusCode::CREATED, Body::from(txt)).into_response())
 }
 
 async fn get_exponential_team_permissions(
@@ -7736,7 +7852,9 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/projects/{project_id}/members",
-            axum::routing::get(get_exponential_project_members).with_state(tool_router.clone()),
+            axum::routing::get(get_exponential_project_members)
+                .post(create_exponential_project_member)
+                .with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/projects/{project_id}/permissions",
@@ -7754,7 +7872,9 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         )
         .route(
             "/api/exponential/teams/{team_id}/members",
-            axum::routing::get(get_exponential_team_members).with_state(tool_router.clone()),
+            axum::routing::get(get_exponential_team_members)
+                .post(create_exponential_team_member)
+                .with_state(tool_router.clone()),
         )
         .route(
             "/api/exponential/teams/{team_id}/permissions",
@@ -8326,7 +8446,9 @@ mod tests {
             )
             .route(
                 "/api/exponential/projects/{project_id}/members",
-                get(get_exponential_project_members).with_state(tool_router.clone()),
+                get(get_exponential_project_members)
+                    .post(create_exponential_project_member)
+                    .with_state(tool_router.clone()),
             )
             .route(
                 "/api/exponential/projects/{project_id}/permissions",
@@ -8344,7 +8466,9 @@ mod tests {
             )
             .route(
                 "/api/exponential/teams/{team_id}/members",
-                get(get_exponential_team_members).with_state(tool_router.clone()),
+                get(get_exponential_team_members)
+                    .post(create_exponential_team_member)
+                    .with_state(tool_router.clone()),
             )
             .route(
                 "/api/exponential/teams/{team_id}/permissions",
