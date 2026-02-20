@@ -219,6 +219,922 @@ async fn proxy_greenspot(
     .await
 }
 
+fn greenspot_mode_from_query(query: Option<&str>) -> &'static str {
+    let Some(q) = query else {
+        return "detail";
+    };
+    for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
+        if k == "mode" && v == "compact" {
+            return "compact";
+        }
+    }
+    "detail"
+}
+
+fn greenspot_ok(request_id: &str, mode: &str, data: Value, status: StatusCode) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "ok": true,
+            "mode": mode,
+            "requestId": request_id,
+            "data": data,
+        })),
+    )
+        .into_response()
+}
+
+fn greenspot_error(
+    request_id: &str,
+    mode: &str,
+    status: StatusCode,
+    code: &str,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "ok": false,
+            "mode": mode,
+            "requestId": request_id,
+            "data": Value::Null,
+            "error": {
+                "code": code,
+                "message": message.into(),
+            }
+        })),
+    )
+        .into_response()
+}
+
+async fn greenspot_rest_call(
+    method: Method,
+    table: &str,
+    query: Vec<(String, String)>,
+    body: Option<Value>,
+) -> Result<(StatusCode, String), Response> {
+    let (base, key) = supabase_env()?;
+    let client = supabase_client_with_key(&key);
+    let mut url = parse_upstream_url_or_500(&format!("{base}/rest/v1/{table}"))?;
+    {
+        let mut qp = url.query_pairs_mut();
+        for (k, v) in query {
+            qp.append_pair(&k, &v);
+        }
+    }
+
+    let mut req = client.request(method, url.as_str());
+    if body.is_some() {
+        req = req.header("Prefer", "return=representation");
+    }
+    if let Some(payload) = body {
+        req = req.json(&payload);
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let txt = resp.text().await.unwrap_or_default();
+            Ok((status, txt))
+        }
+        Err(err) => Err(
+            standard_error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to reach Supabase REST: {err}"),
+            ),
+        ),
+    }
+}
+
+async fn greenspot_list(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    table: &'static str,
+    order: &'static str,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = greenspot_mode_from_query(request.uri().query());
+    let rid = request_id_from_extension(request_id);
+    let mut params = vec![("select".to_string(), "*".to_string()), ("order".to_string(), order.to_string())];
+    if let Some(query) = request.uri().query() {
+        let mut limit_set = false;
+        let mut include_archived = false;
+        let mut search_val: Option<String> = None;
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if k == "limit" {
+                if let Ok(n) = v.parse::<usize>() {
+                    let bounded = n.clamp(1, 200);
+                    params.push(("limit".to_string(), bounded.to_string()));
+                    limit_set = true;
+                }
+            } else if k == "includeArchived" && v == "true" {
+                include_archived = true;
+            } else if k == "search" {
+                search_val = Some(v.to_string());
+            }
+        }
+        if !include_archived && (table == "crm_contacts" || table == "crm_companies") {
+            params.push(("archived_at".to_string(), "is.null".to_string()));
+        }
+        if !limit_set {
+            params.push(("limit".to_string(), "50".to_string()));
+        }
+        if let Some(search) = search_val {
+            let esc = search.replace(',', " ");
+            if table == "crm_contacts" {
+                params.push(("or".to_string(), format!("first_name.ilike.%{esc}%,last_name.ilike.%{esc}%,email.ilike.%{esc}%")));
+            } else if table == "crm_companies" {
+                params.push(("or".to_string(), format!("name.ilike.%{esc}%,domain.ilike.%{esc}%")));
+            }
+        }
+    } else {
+        params.push(("limit".to_string(), "50".to_string()));
+        if table == "crm_contacts" || table == "crm_companies" {
+            params.push(("archived_at".to_string(), "is.null".to_string()));
+        }
+    }
+
+    match greenspot_rest_call(Method::GET, table, params, None).await {
+        Ok((status, txt)) if status.is_success() => {
+            let items: Value = serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([]));
+            greenspot_ok(&rid, mode, serde_json::json!({"items": items}), StatusCode::OK)
+        }
+        Ok((status, txt)) => greenspot_error(
+            &rid,
+            mode,
+            status,
+            "GS_INTERNAL_ERROR",
+            supabase_error_message(&txt),
+        ),
+        Err(resp) => resp,
+    }
+}
+
+async fn greenspot_create(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    table: &'static str,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = "detail";
+    let rid = request_id_from_extension(request_id);
+    let body_bytes = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => {
+            return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Request body too large");
+        }
+    };
+    let payload: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Invalid JSON body");
+        }
+    };
+    match greenspot_rest_call(Method::POST, table, vec![("select".into(), "*".into())], Some(serde_json::json!([payload]))).await {
+        Ok((status, txt)) if status.is_success() => {
+            let item: Value = parse_rows::<Value>(&txt).into_iter().next().unwrap_or(Value::Null);
+            greenspot_ok(&rid, mode, serde_json::json!({"item": item}), StatusCode::CREATED)
+        }
+        Ok((status, txt)) => greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+        Err(resp) => resp,
+    }
+}
+
+async fn greenspot_get_by_id(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    table: &'static str,
+    id_col: &'static str,
+    id: String,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = greenspot_mode_from_query(request.uri().query());
+    let rid = request_id_from_extension(request_id);
+    match greenspot_rest_call(
+        Method::GET,
+        table,
+        vec![("select".into(), "*".into()), (id_col.into(), format!("eq.{id}")), ("limit".into(), "1".into())],
+        None,
+    )
+    .await
+    {
+        Ok((status, txt)) if status.is_success() => {
+            let item: Value = parse_rows::<Value>(&txt).into_iter().next().unwrap_or(Value::Null);
+            greenspot_ok(&rid, mode, serde_json::json!({"item": item}), StatusCode::OK)
+        }
+        Ok((status, txt)) => greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+        Err(resp) => resp,
+    }
+}
+
+async fn greenspot_patch_by_id(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    table: &'static str,
+    id_col: &'static str,
+    id: String,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = "detail";
+    let rid = request_id_from_extension(request_id);
+    let body_bytes = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Request body too large"),
+    };
+    let payload: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(_) => return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Invalid JSON body"),
+    };
+    match greenspot_rest_call(
+        Method::PATCH,
+        table,
+        vec![("select".into(), "*".into()), (id_col.into(), format!("eq.{id}"))],
+        Some(payload),
+    )
+    .await
+    {
+        Ok((status, txt)) if status.is_success() => {
+            let item: Value = parse_rows::<Value>(&txt).into_iter().next().unwrap_or(Value::Null);
+            greenspot_ok(&rid, mode, serde_json::json!({"item": item}), StatusCode::OK)
+        }
+        Ok((status, txt)) => greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+        Err(resp) => resp,
+    }
+}
+
+async fn greenspot_delete_by_id(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    table: &'static str,
+    id_col: &'static str,
+    id: String,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = "detail";
+    let rid = request_id_from_extension(request_id);
+    match greenspot_rest_call(
+        Method::DELETE,
+        table,
+        vec![("select".into(), "*".into()), (id_col.into(), format!("eq.{id}"))],
+        None,
+    )
+    .await
+    {
+        Ok((status, txt)) if status.is_success() => {
+            let item: Value = parse_rows::<Value>(&txt).into_iter().next().unwrap_or(Value::Null);
+            greenspot_ok(&rid, mode, serde_json::json!({"item": item}), StatusCode::OK)
+        }
+        Ok((status, txt)) => greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+        Err(resp) => resp,
+    }
+}
+
+async fn greenspot_dashboard(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = greenspot_mode_from_query(request.uri().query());
+    let rid = request_id_from_extension(request_id);
+
+    let contacts = greenspot_rest_call(Method::GET, "crm_contacts", vec![("select".into(), "id".into())], None).await;
+    let companies = greenspot_rest_call(Method::GET, "crm_companies", vec![("select".into(), "id".into())], None).await;
+    let deals = greenspot_rest_call(Method::GET, "crm_deals", vec![("select".into(), "id".into())], None).await;
+    let tasks = greenspot_rest_call(Method::GET, "crm_tasks", vec![("select".into(), "id".into())], None).await;
+    let recent = greenspot_rest_call(Method::GET, "crm_audit_events", vec![("select".into(), "*".into()), ("order".into(), "created_at.desc".into()), ("limit".into(), "5".into())], None).await;
+
+    let count = |res: Result<(StatusCode, String), Response>| -> usize {
+        match res {
+            Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt).len(),
+            _ => 0,
+        }
+    };
+    let recent_activity: Value = match recent {
+        Ok((s, txt)) if s.is_success() => serde_json::from_str(&txt).unwrap_or_else(|_| serde_json::json!([])),
+        _ => serde_json::json!([]),
+    };
+
+    greenspot_ok(
+        &rid,
+        mode,
+        serde_json::json!({
+            "stats": {
+                "contacts": count(contacts),
+                "companies": count(companies),
+                "deals": count(deals),
+                "tasks": count(tasks),
+            },
+            "recentActivity": recent_activity,
+        }),
+        StatusCode::OK,
+    )
+}
+
+async fn greenspot_audit_events(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    greenspot_list(principal, request_id, request, "crm_audit_events", "created_at.desc").await
+}
+
+async fn greenspot_pipelines_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = greenspot_mode_from_query(request.uri().query());
+    let rid = request_id_from_extension(request_id);
+
+    let pipelines = greenspot_rest_call(Method::GET, "crm_deal_pipelines", vec![("select".into(), "*".into()), ("order".into(), "created_at.asc".into())], None).await;
+    let stages = greenspot_rest_call(Method::GET, "crm_deal_pipeline_stages", vec![("select".into(), "*".into()), ("order".into(), "order.asc".into())], None).await;
+
+    let pipeline_rows: Vec<Value> = match pipelines { Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt), _ => vec![] };
+    let stage_rows: Vec<Value> = match stages { Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt), _ => vec![] };
+
+    let mut stage_map: HashMap<String, Vec<Value>> = HashMap::new();
+    for st in stage_rows {
+        if let Some(pid) = st.get("pipeline_id").and_then(|v| v.as_str()) {
+            let mapped = serde_json::json!({
+                "key": st.get("stage_key").cloned().unwrap_or(Value::Null),
+                "label": st.get("label").cloned().unwrap_or(Value::Null),
+                "order": st.get("order").cloned().unwrap_or(serde_json::json!(0)),
+                "isClosedWon": st.get("is_closed_won").cloned().unwrap_or(serde_json::json!(false)),
+                "isClosedLost": st.get("is_closed_lost").cloned().unwrap_or(serde_json::json!(false)),
+                "isActive": st.get("is_active").cloned().unwrap_or(serde_json::json!(true)),
+            });
+            stage_map.entry(pid.to_string()).or_default().push(mapped);
+        }
+    }
+
+    let mut items = Vec::new();
+    for p in pipeline_rows {
+        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let stages = stage_map.remove(&id).unwrap_or_default();
+        items.push(serde_json::json!({
+            "id": id,
+            "name": p.get("name").cloned().unwrap_or(Value::Null),
+            "description": p.get("description").cloned().unwrap_or(serde_json::json!("")),
+            "stages": stages,
+        }));
+    }
+
+    greenspot_ok(&rid, mode, serde_json::json!({"items": items}), StatusCode::OK)
+}
+
+async fn greenspot_pipelines_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let rid = request_id_from_extension(request_id);
+    let mode = "detail";
+    let body_bytes = match to_bytes(request.into_body(), 2 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => {
+            return greenspot_error(
+                &rid,
+                mode,
+                StatusCode::BAD_REQUEST,
+                "GS_VALIDATION_FAILED",
+                "Request body too large",
+            )
+        }
+    };
+    let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| serde_json::json!({}));
+    let pipelines = payload
+        .get("pipelines")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // delete current pipelines + stages
+    let existing = greenspot_rest_call(
+        Method::GET,
+        "crm_deal_pipelines",
+        vec![("select".into(), "id".into())],
+        None,
+    )
+    .await;
+    let existing_ids: Vec<String> = match existing {
+        Ok((status, txt)) if status.is_success() => parse_rows::<Value>(&txt)
+            .into_iter()
+            .filter_map(|v| v.get("id").and_then(|x| x.as_str()).map(ToOwned::to_owned))
+            .collect(),
+        _ => vec![],
+    };
+    if !existing_ids.is_empty() {
+        let in_filter = format!("in.({})", existing_ids.join(","));
+        let _ = greenspot_rest_call(
+            Method::DELETE,
+            "crm_deal_pipeline_stages",
+            vec![("pipeline_id".into(), in_filter)],
+            None,
+        )
+        .await;
+        let _ = greenspot_rest_call(
+            Method::DELETE,
+            "crm_deal_pipelines",
+            vec![("id".into(), format!("in.({})", existing_ids.join(",")))],
+            None,
+        )
+        .await;
+    }
+
+    let mut pipeline_rows = Vec::new();
+    let mut stage_rows = Vec::new();
+    for p in &pipelines {
+        let id = p
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let name = p
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
+        pipeline_rows.push(serde_json::json!({
+            "id": id,
+            "name": name,
+            "description": p.get("description").and_then(|v| v.as_str()).unwrap_or("")
+        }));
+        if let Some(stages) = p.get("stages").and_then(|v| v.as_array()) {
+            for s in stages {
+                if let Some(key) = s.get("key").and_then(|v| v.as_str()) {
+                    if key.is_empty() {
+                        continue;
+                    }
+                    stage_rows.push(serde_json::json!({
+                        "pipeline_id": p.get("id"),
+                        "stage_key": key,
+                        "label": s.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                        "order": s.get("order").and_then(|v| v.as_i64()).unwrap_or(0),
+                        "is_closed_won": s.get("isClosedWon").and_then(|v| v.as_bool()).unwrap_or(false),
+                        "is_closed_lost": s.get("isClosedLost").and_then(|v| v.as_bool()).unwrap_or(false),
+                        "is_active": s.get("isActive").and_then(|v| v.as_bool()).unwrap_or(true),
+                    }));
+                }
+            }
+        }
+    }
+
+    if !pipeline_rows.is_empty() {
+        if let Ok((status, txt)) = greenspot_rest_call(
+            Method::POST,
+            "crm_deal_pipelines",
+            vec![],
+            Some(Value::Array(pipeline_rows)),
+        )
+        .await
+        {
+            if !status.is_success() {
+                return greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt));
+            }
+        }
+    }
+    if !stage_rows.is_empty() {
+        if let Ok((status, txt)) = greenspot_rest_call(
+            Method::POST,
+            "crm_deal_pipeline_stages",
+            vec![],
+            Some(Value::Array(stage_rows)),
+        )
+        .await
+        {
+            if !status.is_success() {
+                return greenspot_error(&rid, mode, status, "GS_INTERNAL_ERROR", supabase_error_message(&txt));
+            }
+        }
+    }
+
+    greenspot_ok(
+        &rid,
+        mode,
+        serde_json::json!({"items": pipelines}),
+        StatusCode::OK,
+    )
+}
+
+fn customization_entity_to_object_type(entity: &str) -> Option<&'static str> {
+    match entity {
+        "contacts" => Some("contact"),
+        "companies" => Some("company"),
+        "deals" => Some("deal"),
+        "tasks" => Some("task"),
+        _ => None,
+    }
+}
+
+async fn greenspot_customization_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    entity_id: String,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let mode = greenspot_mode_from_query(request.uri().query());
+    let rid = request_id_from_extension(request_id);
+    let Some(object_type) = customization_entity_to_object_type(&entity_id) else {
+        return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Invalid customization entity id");
+    };
+
+    let fields = greenspot_rest_call(Method::GET, "crm_field_definitions", vec![
+        ("select".into(), "id,field_key,label,field_type,required,placeholder,help_text,default_value,validation,display_order".into()),
+        ("object_type".into(), format!("eq.{object_type}")),
+        ("order".into(), "display_order.asc".into()),
+    ], None).await;
+    let sections = greenspot_rest_call(Method::GET, "crm_layout_sections", vec![
+        ("select".into(), "id,name,label,description,display_order".into()),
+        ("object_type".into(), format!("eq.{object_type}")),
+        ("order".into(), "display_order.asc".into()),
+    ], None).await;
+
+    let fields_arr: Vec<Value> = match fields { Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt), _ => vec![] };
+    let sections_arr: Vec<Value> = match sections { Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt), _ => vec![] };
+    let section_ids: Vec<String> = sections_arr.iter().filter_map(|s| s.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)).collect();
+    let mut layout_map: HashMap<String, Vec<String>> = HashMap::new();
+    if !section_ids.is_empty() {
+        let in_clause = format!("in.({})", section_ids.join(","));
+        if let Ok((s, txt)) = greenspot_rest_call(Method::GET, "crm_layout_fields", vec![
+            ("select".into(), "section_id,field_definition_id".into()),
+            ("section_id".into(), in_clause),
+            ("order".into(), "display_order.asc".into()),
+        ], None).await {
+            if s.is_success() {
+                for row in parse_rows::<Value>(&txt) {
+                    if let (Some(sec), Some(fid)) = (
+                        row.get("section_id").and_then(|v| v.as_str()),
+                        row.get("field_definition_id").and_then(|v| v.as_str()),
+                    ) {
+                        layout_map.entry(sec.to_string()).or_default().push(fid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mapped_fields: Vec<Value> = fields_arr
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f.get("id").cloned().unwrap_or(Value::Null),
+                "label": f.get("label").cloned().unwrap_or(Value::Null),
+                "fieldKey": f.get("field_key").cloned().unwrap_or(Value::Null),
+                "type": f.get("field_type").cloned().unwrap_or(Value::Null),
+                "required": f.get("required").cloned().unwrap_or(serde_json::json!(false)),
+                "placeholder": f.get("placeholder").cloned().unwrap_or(Value::Null),
+                "description": f.get("help_text").cloned().unwrap_or(Value::Null),
+                "defaultValue": f.get("default_value").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+    let mapped_sections: Vec<Value> = sections_arr
+        .iter()
+        .map(|s| {
+            let sid = s.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            serde_json::json!({
+                "id": s.get("id").cloned().unwrap_or(Value::Null),
+                "name": s.get("name").cloned().unwrap_or(Value::Null),
+                "label": s.get("label").cloned().unwrap_or(Value::Null),
+                "fieldIds": layout_map.get(sid).cloned().unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    greenspot_ok(&rid, mode, serde_json::json!({"item": {"fields": mapped_fields, "sections": mapped_sections}}), StatusCode::OK)
+}
+
+async fn greenspot_customization_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+    entity_id: String,
+) -> Response {
+    if principal.is_none() {
+        return standard_error_response(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    let rid = request_id_from_extension(request_id);
+    let mode = "detail";
+    let Some(object_type) = customization_entity_to_object_type(&entity_id) else {
+        return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Invalid customization entity id");
+    };
+    let body_bytes = match to_bytes(request.into_body(), 2 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return greenspot_error(&rid, mode, StatusCode::BAD_REQUEST, "GS_VALIDATION_FAILED", "Request body too large"),
+    };
+    let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| serde_json::json!({}));
+    let settings = payload.get("settings").cloned().unwrap_or_else(|| payload.clone());
+    let fields = settings.get("fields").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let sections = settings.get("sections").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    // delete existing object_type customizations
+    let existing_fields = match greenspot_rest_call(Method::GET, "crm_field_definitions", vec![
+        ("select".into(), "id".into()),
+        ("object_type".into(), format!("eq.{object_type}")),
+    ], None).await {
+        Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt),
+        _ => vec![],
+    };
+    let field_ids: Vec<String> = existing_fields.iter().filter_map(|f| f.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)).collect();
+    let existing_sections = match greenspot_rest_call(Method::GET, "crm_layout_sections", vec![
+        ("select".into(), "id".into()),
+        ("object_type".into(), format!("eq.{object_type}")),
+    ], None).await {
+        Ok((s, txt)) if s.is_success() => parse_rows::<Value>(&txt),
+        _ => vec![],
+    };
+    let section_ids: Vec<String> = existing_sections.iter().filter_map(|f| f.get("id").and_then(|v| v.as_str()).map(ToOwned::to_owned)).collect();
+
+    if !section_ids.is_empty() {
+        let _ = greenspot_rest_call(Method::DELETE, "crm_layout_fields", vec![("section_id".into(), format!("in.({})", section_ids.join(",")))], None).await;
+    }
+    let _ = greenspot_rest_call(Method::DELETE, "crm_layout_sections", vec![("object_type".into(), format!("eq.{object_type}"))], None).await;
+    if !field_ids.is_empty() {
+        let _ = greenspot_rest_call(Method::DELETE, "crm_field_options", vec![("field_definition_id".into(), format!("in.({})", field_ids.join(",")))], None).await;
+    }
+    let _ = greenspot_rest_call(Method::DELETE, "crm_field_definitions", vec![("object_type".into(), format!("eq.{object_type}"))], None).await;
+
+    let mut inserted_fields: Vec<Value> = Vec::new();
+    if !fields.is_empty() {
+        let rows: Vec<Value> = fields
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, f)| {
+                let key = f.get("fieldKey").and_then(|v| v.as_str()).unwrap_or_default();
+                let label = f.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+                let field_type = f.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                if key.is_empty() || label.is_empty() { return None; }
+                Some(serde_json::json!({
+                    "object_type": object_type,
+                    "field_key": key,
+                    "label": label,
+                    "field_type": field_type,
+                    "required": f.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "placeholder": f.get("placeholder").and_then(|v| v.as_str()),
+                    "help_text": f.get("description").and_then(|v| v.as_str()),
+                    "default_value": f.get("defaultValue").cloned().unwrap_or(Value::Null),
+                    "display_order": idx as i64,
+                }))
+            })
+            .collect();
+        if !rows.is_empty() {
+            match greenspot_rest_call(Method::POST, "crm_field_definitions", vec![("select".into(), "id,field_key".into())], Some(Value::Array(rows))).await {
+                Ok((s, txt)) if s.is_success() => inserted_fields = parse_rows::<Value>(&txt),
+                Ok((s, txt)) => return greenspot_error(&rid, mode, s, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+                Err(resp) => return resp,
+            }
+        }
+    }
+
+    let mut field_id_by_key: HashMap<String, String> = HashMap::new();
+    for f in inserted_fields {
+        if let (Some(id), Some(key)) = (f.get("id").and_then(|v| v.as_str()), f.get("field_key").and_then(|v| v.as_str())) {
+            field_id_by_key.insert(key.to_string(), id.to_string());
+        }
+    }
+
+    let mut inserted_sections: Vec<Value> = Vec::new();
+    if !sections.is_empty() {
+        let sec_rows: Vec<Value> = sections.iter().enumerate().map(|(idx,s)| serde_json::json!({
+            "object_type": object_type,
+            "name": s.get("name").and_then(|v| v.as_str()).unwrap_or("section"),
+            "label": s.get("label").and_then(|v| v.as_str()).unwrap_or("Section"),
+            "display_order": idx as i64,
+        })).collect();
+        match greenspot_rest_call(Method::POST, "crm_layout_sections", vec![("select".into(), "id,name".into())], Some(Value::Array(sec_rows))).await {
+            Ok((s, txt)) if s.is_success() => inserted_sections = parse_rows::<Value>(&txt),
+            Ok((s, txt)) => return greenspot_error(&rid, mode, s, "GS_INTERNAL_ERROR", supabase_error_message(&txt)),
+            Err(resp) => return resp,
+        }
+    }
+
+    if !inserted_sections.is_empty() {
+        let mut section_id_by_name: HashMap<String, String> = HashMap::new();
+        for s in inserted_sections {
+            if let (Some(id), Some(name)) = (s.get("id").and_then(|v| v.as_str()), s.get("name").and_then(|v| v.as_str())) {
+                section_id_by_name.insert(name.to_string(), id.to_string());
+            }
+        }
+        let mut layout_rows: Vec<Value> = vec![];
+        for section in sections {
+            let sname = section.get("name").and_then(|v| v.as_str()).unwrap_or("section");
+            let sid = match section_id_by_name.get(sname) { Some(v) => v.clone(), None => continue };
+            for (idx, fid) in section.get("fieldIds").and_then(|v| v.as_array()).cloned().unwrap_or_default().into_iter().enumerate() {
+                let key = fid.as_str().unwrap_or_default();
+                let field_id = match field_id_by_key.get(key) { Some(v) => v.clone(), None => continue };
+                layout_rows.push(serde_json::json!({"section_id": sid, "field_definition_id": field_id, "display_order": idx as i64}));
+            }
+        }
+        if !layout_rows.is_empty() {
+            let _ = greenspot_rest_call(Method::POST, "crm_layout_fields", vec![], Some(Value::Array(layout_rows))).await;
+        }
+    }
+
+    greenspot_ok(&rid, mode, serde_json::json!({"item": settings}), StatusCode::OK)
+}
+
+async fn greenspot_companies_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_companies", "updated_at.desc").await }
+
+async fn greenspot_companies_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_companies").await }
+
+async fn greenspot_company_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_get_by_id(principal, request_id, request, "crm_companies", "id", id).await }
+
+async fn greenspot_company_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_companies", "id", id).await }
+
+async fn greenspot_contacts_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_contacts", "updated_at.desc").await }
+
+async fn greenspot_contacts_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_contacts").await }
+
+async fn greenspot_contact_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_get_by_id(principal, request_id, request, "crm_contacts", "id", id).await }
+
+async fn greenspot_contact_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_contacts", "id", id).await }
+
+async fn greenspot_contact_delete(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+) -> Response { greenspot_delete_by_id(principal, request_id, "crm_contacts", "id", id).await }
+
+async fn greenspot_deals_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_deals", "updated_at.desc").await }
+
+async fn greenspot_deals_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_deals").await }
+
+async fn greenspot_deal_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_get_by_id(principal, request_id, request, "crm_deals", "id", id).await }
+
+async fn greenspot_deal_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_deals", "id", id).await }
+
+async fn greenspot_tasks_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_tasks", "updated_at.desc").await }
+
+async fn greenspot_tasks_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_tasks").await }
+
+async fn greenspot_task_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_get_by_id(principal, request_id, request, "crm_tasks", "id", id).await }
+
+async fn greenspot_task_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_tasks", "id", id).await }
+
+async fn greenspot_activities_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_activities", "occurred_at.desc").await }
+
+async fn greenspot_activities_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_activities").await }
+
+async fn greenspot_activity_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_get_by_id(principal, request_id, request, "crm_activities", "id", id).await }
+
+async fn greenspot_activity_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_activities", "id", id).await }
+
+async fn greenspot_deal_stages_get(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_list(principal, request_id, request, "crm_deal_stages", "order.asc").await }
+
+async fn greenspot_deal_stages_post(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    request: Request,
+) -> Response { greenspot_create(principal, request_id, request, "crm_deal_stages").await }
+
+async fn greenspot_deal_stage_patch(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(key): Path<String>,
+    request: Request,
+) -> Response { greenspot_patch_by_id(principal, request_id, request, "crm_deal_stages", "key", key).await }
+
+async fn greenspot_customization_get_route(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(entity_id): Path<String>,
+    request: Request,
+) -> Response {
+    greenspot_customization_get(principal, request_id, request, entity_id).await
+}
+
+async fn greenspot_customization_patch_route(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    request_id: Option<axum::extract::Extension<RequestId>>,
+    Path(entity_id): Path<String>,
+    request: Request,
+) -> Response {
+    greenspot_customization_patch(principal, request_id, request, entity_id).await
+}
+
 async fn proxy_greenbooks_direct(
     State(state): State<ApiProxyState>,
     headers: axum::http::HeaderMap,
@@ -6906,8 +7822,74 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(greenbooks_convert_fx),
         )
         .route(
-            "/api/greenspot/{*path}",
-            axum::routing::any(proxy_greenspot).with_state(proxy_state.clone()),
+            "/api/greenspot/dashboard",
+            axum::routing::get(greenspot_dashboard),
+        )
+        .route(
+            "/api/greenspot/companies",
+            axum::routing::get(greenspot_companies_get).post(greenspot_companies_post),
+        )
+        .route(
+            "/api/greenspot/companies/{id}",
+            axum::routing::get(greenspot_company_get).patch(greenspot_company_patch),
+        )
+        .route(
+            "/api/greenspot/contacts",
+            axum::routing::get(greenspot_contacts_get).post(greenspot_contacts_post),
+        )
+        .route(
+            "/api/greenspot/contacts/{id}",
+            axum::routing::get(greenspot_contact_get)
+                .patch(greenspot_contact_patch)
+                .delete(greenspot_contact_delete),
+        )
+        .route(
+            "/api/greenspot/deals",
+            axum::routing::get(greenspot_deals_get).post(greenspot_deals_post),
+        )
+        .route(
+            "/api/greenspot/deals/{id}",
+            axum::routing::get(greenspot_deal_get).patch(greenspot_deal_patch),
+        )
+        .route(
+            "/api/greenspot/tasks",
+            axum::routing::get(greenspot_tasks_get).post(greenspot_tasks_post),
+        )
+        .route(
+            "/api/greenspot/tasks/{id}",
+            axum::routing::get(greenspot_task_get).patch(greenspot_task_patch),
+        )
+        .route(
+            "/api/greenspot/activities",
+            axum::routing::get(greenspot_activities_get).post(greenspot_activities_post),
+        )
+        .route(
+            "/api/greenspot/activities/{id}",
+            axum::routing::get(greenspot_activity_get).patch(greenspot_activity_patch),
+        )
+        .route(
+            "/api/greenspot/deal-stages",
+            axum::routing::get(greenspot_deal_stages_get).post(greenspot_deal_stages_post),
+        )
+        .route(
+            "/api/greenspot/deal-stages/{key}",
+            axum::routing::patch(greenspot_deal_stage_patch),
+        )
+        .route(
+            "/api/greenspot/pipelines",
+            axum::routing::get(greenspot_pipelines_get)
+                .post(greenspot_pipelines_post)
+                .put(greenspot_pipelines_post),
+        )
+        .route(
+            "/api/greenspot/audit-events",
+            axum::routing::get(greenspot_audit_events),
+        )
+        .route(
+            "/api/greenspot/customization/{entity_id}",
+            axum::routing::get(greenspot_customization_get_route)
+                .patch(greenspot_customization_patch_route)
+                .put(greenspot_customization_patch_route),
         )
         .route(
             "/api/users",
