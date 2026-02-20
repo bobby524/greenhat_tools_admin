@@ -6509,17 +6509,101 @@ async fn list_exponential_projects(
 }
 
 async fn create_exponential_project(
-    State(router): State<ToolRouter>,
-    headers: axum::http::HeaderMap,
-    request_id: Option<axum::extract::Extension<RequestId>>,
+    State(_router): State<ToolRouter>,
+    _headers: axum::http::HeaderMap,
+    _request_id: Option<axum::extract::Extension<RequestId>>,
     principal: Option<axum::extract::Extension<crate::auth::Principal>>,
     Json(body): Json<Value>,
 ) -> Result<Response, AppError> {
-    let ctx = build_tool_audit_ctx(&headers, request_id, principal);
-    let request_id = ctx.request_id.clone();
-    let body = body_to_object(body, &request_id)?;
-    let params = project_params_from_body(&body);
-    Ok(execute_exponential_tool(router, ctx, "create_project", Value::Object(params)).await)
+    if principal.is_none() {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    }
+
+    let body = body.as_object().cloned().unwrap_or_default();
+    let team_id = pick_value(&body, &["team_id", "teamId"])
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if team_id.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"team_id is required"})),
+        )
+            .into_response());
+    }
+    if name.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"Project name is required"})),
+        )
+            .into_response());
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut project = serde_json::Map::new();
+    project.insert("org_id".into(), serde_json::json!(EXPONENTIAL_ORG_ID));
+    project.insert("team_id".into(), serde_json::json!(team_id));
+    project.insert("name".into(), serde_json::json!(name));
+
+    if let Some(v) = body.get("description") {
+        project.insert("description".into(), sanitize_description_value(v));
+    }
+    if let Some(v) = body.get("color").and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            project.insert("color".into(), serde_json::json!(v.trim()));
+        }
+    }
+    if let Some(v) = body.get("icon").and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            project.insert("icon".into(), serde_json::json!(v.trim()));
+        }
+    }
+    if let Some(v) = pick_value(&body, &["sprint_duration_days", "sprintDurationDays"]).and_then(|v| v.as_i64()) {
+        project.insert("sprint_duration_days".into(), serde_json::json!(v));
+    }
+    if let Some(v) = pick_value(&body, &["start_date", "startDate"]).and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            project.insert("start_date".into(), serde_json::json!(v.trim()));
+        }
+    }
+
+    let payload = serde_json::Value::Array(vec![serde_json::Value::Object(project)]);
+    let resp = client
+        .post(format!("{base}/rest/v1/projects"))
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let status = resp.status();
+    let txt = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Ok((status, Body::from(txt)).into_response());
+    }
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&txt).unwrap_or_default();
+    let project = rows
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok((StatusCode::CREATED, Json(serde_json::json!({"project": project}))).into_response())
 }
 
 async fn get_exponential_project(
