@@ -5790,7 +5790,8 @@ async fn list_exponential_tasks(
         }
         qp.append_pair("order", "updated_at.desc");
         qp.append_pair("order", "id.desc");
-        qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
+        // Default remains 50; allow explicit larger asks up to 150.
+        qp.append_pair("limit", &query.limit.unwrap_or(50).min(150).to_string());
     }
     let resp = client
         .get(url.as_str())
@@ -6963,7 +6964,8 @@ async fn get_exponential_project_tasks(
         }
         qp.append_pair("order", "updated_at.desc");
         qp.append_pair("order", "id.desc");
-        qp.append_pair("limit", &query.limit.unwrap_or(50).min(50).to_string());
+        // Default remains 50; allow explicit larger asks up to 150.
+        qp.append_pair("limit", &query.limit.unwrap_or(50).min(150).to_string());
     }
     let resp = client
         .get(url.as_str())
