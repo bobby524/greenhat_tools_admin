@@ -7105,7 +7105,6 @@ async fn create_exponential_project_member(
     };
     let client = supabase_client_with_key(&key);
     let payload = serde_json::json!([{
-        "org_id": EXPONENTIAL_ORG_ID,
         "project_id": project_id,
         "user_id": user_id,
         "role": role
@@ -7191,7 +7190,6 @@ async fn create_exponential_team_member(
     };
     let client = supabase_client_with_key(&key);
     let payload = serde_json::json!([{
-        "org_id": EXPONENTIAL_ORG_ID,
         "team_id": team_id,
         "user_id": user_id,
         "role": role
