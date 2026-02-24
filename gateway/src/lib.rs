@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod egress;
 pub mod error;
+pub mod daisy;
 pub mod middleware;
 pub mod observability;
 pub mod quickbooks_import;
@@ -8310,6 +8311,17 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
             axum::routing::get(greenspot_customization_get_route)
                 .patch(greenspot_customization_patch_route)
                 .put(greenspot_customization_patch_route),
+        )
+        .route("/api/daisy-notes/notes", axum::routing::get(crate::daisy::list_notes))
+        .route(
+            "/api/daisy-notes/notes/{note_id}",
+            axum::routing::get(crate::daisy::get_note_by_id),
+        )
+        .route(
+            "/api/daisy-notes/notes/{note_id}/share",
+            axum::routing::get(crate::daisy::list_note_shares)
+                .post(crate::daisy::upsert_note_share)
+                .delete(crate::daisy::remove_note_share),
         )
         .route(
             "/api/users",
