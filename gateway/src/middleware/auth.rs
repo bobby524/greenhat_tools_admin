@@ -229,8 +229,14 @@ fn extract_credential(headers: &HeaderMap, cookie_name: &str) -> Option<SessionC
     // companion cookies in addition to the session token cookie itself.
     let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
-    // 1) Honor configured cookie name first.
+    // 1) Honor configured cookie name first (plus __Secure- prefixed variant).
     if has_cookie(cookie_header, cookie_name) {
+        return Some(SessionCredential::Cookie(cookie_header.to_owned()));
+    }
+    let secure_configured_cookie = format!("__Secure-{}", cookie_name);
+    if secure_configured_cookie != cookie_name
+        && has_cookie(cookie_header, secure_configured_cookie.as_str())
+    {
         return Some(SessionCredential::Cookie(cookie_header.to_owned()));
     }
 
@@ -238,6 +244,7 @@ fn extract_credential(headers: &HeaderMap, cookie_name: &str) -> Option<SessionC
     for alias in [
         "__Secure-greenhat_tools.session_token",
         "greenhat_tools.session_token",
+        "__Secure-better-auth.session_token",
         "better-auth.session_token",
     ] {
         if alias != cookie_name && has_cookie(cookie_header, alias) {
@@ -286,5 +293,33 @@ mod tests {
             }
             _ => panic!("expected cookie credential"),
         }
+    }
+
+    #[test]
+    fn extract_credential_supports_secure_configured_cookie_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "a=1; __Secure-custom.session_token=tok123; b=2"
+                .parse()
+                .expect("valid cookie header"),
+        );
+
+        let cred = extract_credential(&headers, "custom.session_token");
+        assert!(matches!(cred, Some(SessionCredential::Cookie(_))));
+    }
+
+    #[test]
+    fn extract_credential_supports_secure_better_auth_alias() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "a=1; __Secure-better-auth.session_token=tok123; b=2"
+                .parse()
+                .expect("valid cookie header"),
+        );
+
+        let cred = extract_credential(&headers, "greenhat_tools.session_token");
+        assert!(matches!(cred, Some(SessionCredential::Cookie(_))));
     }
 }
