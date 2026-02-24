@@ -4471,6 +4471,15 @@ struct SetUserModuleAccessRequest {
     role: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct AdminInviteUserRequest {
+    email: String,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    role: Option<String>,
+    modules: Vec<String>,
+}
+
 fn is_admin_principal(principal: &crate::auth::Principal) -> bool {
     principal.roles.iter().any(|r| r == "admin" || r == "owner")
 }
@@ -4646,6 +4655,140 @@ async fn set_admin_module_access_for_user(
     }
 
     Ok(Json(serde_json::json!({"ok": true, "user_id": user_id})).into_response())
+}
+
+async fn invite_admin_module_access_user(
+    principal: Option<axum::extract::Extension<crate::auth::Principal>>,
+    axum::Json(payload): axum::Json<AdminInviteUserRequest>,
+) -> Result<Response, AppError> {
+    let Some(axum::extract::Extension(principal)) = principal else {
+        return Ok(standard_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized",
+        ));
+    };
+    if !is_admin_principal(&principal) {
+        return Ok(standard_error_response(StatusCode::FORBIDDEN, "Forbidden"));
+    }
+
+    let email = payload.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Ok(standard_error_response(
+            StatusCode::BAD_REQUEST,
+            "Valid email is required",
+        ));
+    }
+
+    let requested: std::collections::HashSet<String> = payload.modules.into_iter().collect();
+    let allowed: std::collections::HashSet<String> =
+        MODULE_KEYS.iter().map(|m| m.to_string()).collect();
+    if !requested.iter().all(|m| allowed.contains(m)) {
+        return Ok(standard_error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid module key",
+        ));
+    }
+
+    let role = payload.role.unwrap_or_else(|| "user".to_string());
+    let valid_roles = ["owner", "admin", "member", "user"];
+    if !valid_roles.contains(&role.as_str()) {
+        return Ok(standard_error_response(
+            StatusCode::BAD_REQUEST,
+            "Invalid role",
+        ));
+    }
+
+    let (base, key) = match supabase_env() {
+        Ok(v) => v,
+        Err(r) => return Ok(r),
+    };
+    let client = supabase_client_with_key(&key);
+
+    let mut existing_url = url::Url::parse(&format!("{base}/rest/v1/users"))
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        let mut qp = existing_url.query_pairs_mut();
+        qp.append_pair("select", "id,email");
+        qp.append_pair("email", &format!("eq.{email}"));
+        qp.append_pair("limit", "1");
+    }
+
+    let existing_resp = client
+        .get(existing_url.as_str())
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    if !existing_resp.status().is_success() {
+        return Ok((
+            existing_resp.status(),
+            Body::from(existing_resp.text().await.unwrap_or_default()),
+        )
+            .into_response());
+    }
+
+    let existing_rows: Vec<serde_json::Value> = serde_json::from_str(
+        &existing_resp.text().await.unwrap_or_default(),
+    )
+    .unwrap_or_default();
+
+    let user_id = if let Some(row) = existing_rows.first() {
+        row.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let user_body = serde_json::json!({
+            "id": new_id,
+            "email": email,
+            "first_name": payload.first_name,
+            "last_name": payload.last_name,
+            "role": role,
+        })
+        .to_string();
+
+        let create_resp = client
+            .post(format!("{base}/rest/v1/users"))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=representation")
+            .body(user_body)
+            .send()
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+        if !create_resp.status().is_success() {
+            return Ok((
+                create_resp.status(),
+                Body::from(create_resp.text().await.unwrap_or_default()),
+            )
+                .into_response());
+        }
+
+        new_id
+    };
+
+    if existing_rows.first().is_some() {
+        set_user_role(&user_id, &role).await?;
+    }
+
+    let org_id = principal
+        .org_id
+        .as_deref()
+        .unwrap_or(EXPONENTIAL_ORG_ID)
+        .to_string();
+    replace_module_access_for_user(&org_id, &user_id, requested.into_iter().collect()).await?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "user_id": user_id,
+        "email": email,
+        "magic_link": {
+            "enabled": true,
+            "next_step": "User signs in via /auth/signin email magic link"
+        }
+    }))
+    .into_response())
 }
 
 async fn load_module_access_for_user(org_id: &str, user_id: &str) -> Result<Vec<String>, AppError> {
@@ -8183,6 +8326,10 @@ pub fn app(config: &GatewayConfig, audit_log: Option<AuditLog>) -> Router {
         .route(
             "/api/admin/module-access/users",
             axum::routing::get(list_admin_module_access_users),
+        )
+        .route(
+            "/api/admin/module-access/invite",
+            axum::routing::post(invite_admin_module_access_user),
         )
         .route(
             "/api/admin/module-access/{user_id}",
