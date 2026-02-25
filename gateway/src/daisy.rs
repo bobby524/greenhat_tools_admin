@@ -1310,12 +1310,22 @@ mod tests {
     use crate::auth::AuthMethod;
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        extract::{Request as AxumRequest, State},
+        http::{Method, Request, StatusCode},
         middleware::{self as axum_mw, Next},
-        routing::get,
+        response::IntoResponse,
+        routing::{any, get},
         Router,
     };
     use http_body_util::BodyExt;
+    use std::{
+        env,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, OnceLock,
+        },
+    };
+    use tokio::{net::TcpListener, sync::OwnedSemaphorePermit};
     use tower::ServiceExt;
 
     async fn body_json(resp: Response) -> serde_json::Value {
@@ -1357,6 +1367,104 @@ mod tests {
         }
 
         router
+    }
+
+    type StubResponder =
+        Arc<dyn Fn(&Method, &str, &str, &str) -> (StatusCode, String) + Send + Sync + 'static>;
+
+    #[derive(Clone)]
+    struct StubState {
+        responder: StubResponder,
+    }
+
+    struct SupabaseStub {
+        base_url: String,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for SupabaseStub {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn stub_handler(State(state): State<StubState>, req: AxumRequest) -> Response {
+        let (parts, body) = req.into_parts();
+        let bytes = body.collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&bytes).to_string();
+        let query = parts.uri.query().unwrap_or("");
+        let (status, payload) = (state.responder)(&parts.method, parts.uri.path(), query, &body);
+        (status, [("content-type", "application/json")], payload).into_response()
+    }
+
+    async fn spawn_supabase_stub(responder: StubResponder) -> SupabaseStub {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let app = Router::new()
+            .fallback(any(stub_handler))
+            .with_state(StubState { responder });
+
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        SupabaseStub {
+            base_url: format!("http://{addr}"),
+            handle,
+        }
+    }
+
+    fn supabase_env_lock() -> &'static Arc<tokio::sync::Semaphore> {
+        static LOCK: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+        LOCK.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+    }
+
+    struct SupabaseEnvGuard {
+        _permit: OwnedSemaphorePermit,
+        old_supabase_url: Option<String>,
+        old_public_supabase_url: Option<String>,
+        old_service_key: Option<String>,
+    }
+
+    impl SupabaseEnvGuard {
+        async fn acquire(base_url: &str, service_key: &str) -> Self {
+            let permit = supabase_env_lock().clone().acquire_owned().await.unwrap();
+
+            let old_supabase_url = env::var("SUPABASE_URL").ok();
+            let old_public_supabase_url = env::var("NEXT_PUBLIC_SUPABASE_URL").ok();
+            let old_service_key = env::var("SUPABASE_SERVICE_ROLE_KEY").ok();
+
+            env::set_var("SUPABASE_URL", base_url);
+            env::set_var("SUPABASE_SERVICE_ROLE_KEY", service_key);
+            env::remove_var("NEXT_PUBLIC_SUPABASE_URL");
+
+            Self {
+                _permit: permit,
+                old_supabase_url,
+                old_public_supabase_url,
+                old_service_key,
+            }
+        }
+    }
+
+    impl Drop for SupabaseEnvGuard {
+        fn drop(&mut self) {
+            match &self.old_supabase_url {
+                Some(value) => env::set_var("SUPABASE_URL", value),
+                None => env::remove_var("SUPABASE_URL"),
+            }
+
+            match &self.old_public_supabase_url {
+                Some(value) => env::set_var("NEXT_PUBLIC_SUPABASE_URL", value),
+                None => env::remove_var("NEXT_PUBLIC_SUPABASE_URL"),
+            }
+
+            match &self.old_service_key {
+                Some(value) => env::set_var("SUPABASE_SERVICE_ROLE_KEY", value),
+                None => env::remove_var("SUPABASE_SERVICE_ROLE_KEY"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -1403,6 +1511,272 @@ mod tests {
             no_public_body["error"]["code"],
             "DAISY_PUBLIC_LINK_DISABLED"
         );
+    }
+
+    #[tokio::test]
+    async fn daisy_list_notes_returns_owner_and_shared_access_roles() {
+        let responder: StubResponder = Arc::new(|method, path, query, _body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("owner_user_id=eq.user_daisy_test")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_owner","title":"Owner note","content":"owned","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-10T10:00:00Z","owner_user_id":"user_daisy_test","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("shared_with_user_id=eq.user_daisy_test")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"note_id":"note_shared","permission":"viewer","created_at":"2026-02-11T10:00:00Z"}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=in.")
+                && query.contains("note_shared")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_shared","title":"Shared note","content":"shared","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-02T10:00:00Z","updated_at":"2026-02-09T10:00:00Z","owner_user_id":"owner_2","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["viewer"])));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/daisy-notes/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        let notes = body["data"]["notes"].as_array().expect("notes array");
+        assert_eq!(notes.len(), 2);
+
+        let owner = notes
+            .iter()
+            .find(|note| note["id"] == "note_owner")
+            .expect("owner note present");
+        assert_eq!(owner["access"]["role"], "owner");
+        assert_eq!(owner["access"]["canEdit"], true);
+        assert_eq!(owner["access"]["canShare"], true);
+
+        let shared = notes
+            .iter()
+            .find(|note| note["id"] == "note_shared")
+            .expect("shared note present");
+        assert_eq!(shared["access"]["role"], "viewer");
+        assert_eq!(shared["access"]["canEdit"], false);
+        assert_eq!(shared["access"]["canShare"], false);
+    }
+
+    #[tokio::test]
+    async fn daisy_get_note_by_id_returns_share_based_viewer_access() {
+        let responder: StubResponder = Arc::new(|method, path, query, _body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=eq.note_shared")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_shared","title":"Shared note","content":"shared","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-02T10:00:00Z","updated_at":"2026-02-09T10:00:00Z","owner_user_id":"owner_2","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("note_id=eq.note_shared")
+                && query.contains("shared_with_user_id=eq.user_daisy_test")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"note_id":"note_shared","permission":"viewer","created_at":"2026-02-11T10:00:00Z"}]"#.to_string(),
+                );
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["viewer"])));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/daisy-notes/notes/note_shared")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["data"]["note"]["id"], "note_shared");
+        assert_eq!(body["data"]["note"]["access"]["role"], "viewer");
+        assert_eq!(body["data"]["note"]["access"]["canEdit"], false);
+        assert_eq!(body["data"]["note"]["access"]["canShare"], false);
+    }
+
+    #[tokio::test]
+    async fn daisy_share_acl_mutations_are_forbidden_for_non_owner_roles() {
+        let list_shares_called = Arc::new(AtomicBool::new(false));
+        let list_shares_called_flag = list_shares_called.clone();
+
+        let responder: StubResponder = Arc::new(move |method, path, query, _body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=eq.note_shared")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_shared","title":"Shared note","content":"shared","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-02T10:00:00Z","updated_at":"2026-02-09T10:00:00Z","owner_user_id":"owner_2","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("note_id=eq.note_shared")
+                && query.contains("shared_with_user_id=eq.user_daisy_test")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"note_id":"note_shared","permission":"editor","created_at":"2026-02-11T10:00:00Z"}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("select=id%2Cnote_id%2Cshared_with_user_id")
+            {
+                list_shares_called_flag.store(true, Ordering::SeqCst);
+                return (StatusCode::OK, "[]".to_string());
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["editor"])));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/daisy-notes/notes/note_shared/share")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = body_json(resp).await;
+        assert_eq!(body["error"]["code"], "DAISY_FORBIDDEN");
+        assert_eq!(list_shares_called.load(Ordering::SeqCst), false);
+    }
+
+    #[tokio::test]
+    async fn daisy_owner_can_upsert_and_remove_shares_via_data_plane() {
+        let upsert_called = Arc::new(AtomicBool::new(false));
+        let delete_called = Arc::new(AtomicBool::new(false));
+        let upsert_flag = upsert_called.clone();
+        let delete_flag = delete_called.clone();
+
+        let responder: StubResponder = Arc::new(move |method, path, query, body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=eq.note_owner")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_owner","title":"Owner note","content":"owned","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-10T10:00:00Z","owner_user_id":"user_daisy_test","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            if method == Method::POST && path == "/rest/v1/daisy_note_shares" {
+                assert!(query.contains("on_conflict="));
+                assert!(body.contains("\"note_id\":\"note_owner\""));
+                assert!(body.contains("\"shared_with_user_id\":\"user_2\""));
+                assert!(body.contains("\"permission\":\"editor\""));
+                upsert_flag.store(true, Ordering::SeqCst);
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"share_1","note_id":"note_owner","shared_with_user_id":"user_2","shared_with_email":null,"permission":"editor","created_at":"2026-02-11T12:00:00Z","updated_at":"2026-02-11T12:00:00Z"}]"#.to_string(),
+                );
+            }
+
+            if method == Method::DELETE
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("note_id=eq.note_owner")
+                && query.contains("shared_with_user_id=eq.user_2")
+            {
+                delete_flag.store(true, Ordering::SeqCst);
+                return (StatusCode::NO_CONTENT, "".to_string());
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["owner"])));
+
+        let upsert_resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/daisy-notes/notes/note_owner/share")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"permission":"editor","sharedWithUserId":"user_2"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upsert_resp.status(), StatusCode::OK);
+        let upsert_body = body_json(upsert_resp).await;
+        assert_eq!(upsert_body["data"]["share"]["id"], "share_1");
+        assert_eq!(upsert_body["data"]["share"]["permission"], "editor");
+        assert!(upsert_called.load(Ordering::SeqCst));
+
+        let delete_resp = router
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/daisy-notes/notes/note_owner/share")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"sharedWithUserId":"user_2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(delete_resp.status(), StatusCode::OK);
+        let delete_body = body_json(delete_resp).await;
+        assert_eq!(delete_body["data"]["removed"], true);
+        assert!(delete_called.load(Ordering::SeqCst));
     }
 
     #[test]
