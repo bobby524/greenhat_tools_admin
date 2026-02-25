@@ -16,8 +16,10 @@ pub enum AuthMethod {
 /// `Extension<Principal>` or by reading extensions directly.
 #[derive(Debug, Clone)]
 pub struct Principal {
-    /// BetterAuth user ID.
+    /// Canonical user ID used for ownership/authorization checks.
     pub user_id: String,
+    /// Trusted user email (normalized lowercase when present).
+    pub email: Option<String>,
     /// Organisation ID (populated when the BetterAuth org plugin is active).
     pub org_id: Option<String>,
     /// Roles / claims attached to the user (e.g. `["admin", "member"]`).

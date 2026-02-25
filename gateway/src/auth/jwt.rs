@@ -104,6 +104,8 @@ struct Jwk {
 struct Claims {
     sub: String,
     #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
     exp: Option<u64>,
     #[serde(default)]
     iss: Option<String>,
@@ -346,7 +348,11 @@ impl JwtValidator {
         }
 
         Ok(Principal {
-            user_id: claims.sub,
+            user_id: claims.sub.trim().to_string(),
+            email: claims
+                .email
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty()),
             org_id: None,
             roles: claims.roles.unwrap_or_default(),
             session_id: claims.jti.unwrap_or_else(|| "-".into()),
@@ -418,6 +424,7 @@ mod tests {
 
         let claims = Claims {
             sub: "u1".into(),
+            email: None,
             exp: Some(9999999999),
             iss: None,
             aud: None,

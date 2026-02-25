@@ -8526,6 +8526,7 @@ mod tests {
     fn test_principal() -> Principal {
         Principal {
             user_id: "test-user".into(),
+            email: None,
             org_id: None,
             roles: vec!["analyst".into()],
             session_id: "test-session".into(),

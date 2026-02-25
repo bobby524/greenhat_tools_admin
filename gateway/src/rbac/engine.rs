@@ -227,6 +227,7 @@ mod tests {
     fn principal(roles: &[&str]) -> Principal {
         Principal {
             user_id: "u-1".into(),
+            email: None,
             org_id: None,
             roles: roles.iter().map(|s| s.to_string()).collect(),
             session_id: "s-1".into(),

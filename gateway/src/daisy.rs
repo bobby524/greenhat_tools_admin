@@ -297,31 +297,50 @@ fn header_value(headers: &HeaderMap, name: &'static str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn normalize_user_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_email(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
 fn scope_from_headers(principal: &Principal, headers: &HeaderMap) -> DaisyActorScope {
-    let user_id = principal.user_id.trim().to_owned();
+    let user_id = normalize_user_id(Some(&principal.user_id)).unwrap_or_default();
 
-    let forwarded_user_id = header_value(headers, "x-daisy-session-user-id");
-    let forwarded_email =
-        header_value(headers, "x-daisy-session-user-email").map(|value| value.to_ascii_lowercase());
+    let trusted_email = normalize_email(principal.email.as_deref());
 
-    let email = match (forwarded_user_id.as_deref(), forwarded_email) {
-        (Some(forwarded_user_id), Some(email)) if forwarded_user_id == user_id => Some(email),
-        _ => None,
+    let compatibility_email = {
+        let forwarded_user_id =
+            normalize_user_id(header_value(headers, "x-daisy-session-user-id").as_deref());
+        let forwarded_email =
+            normalize_email(header_value(headers, "x-daisy-session-user-email").as_deref());
+
+        match (forwarded_user_id, forwarded_email) {
+            (Some(forwarded_user_id), Some(email)) if forwarded_user_id == user_id => Some(email),
+            _ => None,
+        }
     };
 
-    DaisyActorScope { user_id, email }
+    DaisyActorScope {
+        user_id,
+        email: trusted_email.or(compatibility_email),
+    }
 }
 
 fn scope_owns_note(scope: &DaisyActorScope, note: &DaisyNoteRow) -> bool {
-    note.owner_user_id
-        .as_ref()
-        .map(|owner| owner == &scope.user_id)
+    normalize_user_id(note.owner_user_id.as_deref())
+        .map(|owner| owner == scope.user_id)
         .unwrap_or(false)
-        || scope
-            .email
-            .as_ref()
-            .zip(note.owner_email.as_ref())
-            .map(|(scope_email, owner_email)| scope_email.eq_ignore_ascii_case(owner_email))
+        || normalize_email(scope.email.as_deref())
+            .zip(normalize_email(note.owner_email.as_deref()))
+            .map(|(scope_email, owner_email)| scope_email == owner_email)
             .unwrap_or(false)
 }
 
@@ -1244,17 +1263,13 @@ pub async fn upsert_note_share(
         return response;
     }
 
-    let target_is_owner = target
-        .shared_with_user_id
-        .as_ref()
-        .zip(access.note.owner_user_id.as_ref())
+    let target_is_owner = normalize_user_id(target.shared_with_user_id.as_deref())
+        .zip(normalize_user_id(access.note.owner_user_id.as_deref()))
         .map(|(target_user_id, owner_user_id)| target_user_id == owner_user_id)
         .unwrap_or(false)
-        || target
-            .shared_with_email
-            .as_ref()
-            .zip(access.note.owner_email.as_ref())
-            .map(|(target_email, owner_email)| target_email.eq_ignore_ascii_case(owner_email))
+        || normalize_email(target.shared_with_email.as_deref())
+            .zip(normalize_email(access.note.owner_email.as_deref()))
+            .map(|(target_email, owner_email)| target_email == owner_email)
             .unwrap_or(false);
 
     if target_is_owner {
@@ -1400,14 +1415,19 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    fn principal_with_roles(roles: &[&str]) -> Principal {
+    fn principal_with_identity(user_id: &str, email: Option<&str>, roles: &[&str]) -> Principal {
         Principal {
-            user_id: "user_daisy_test".to_string(),
+            user_id: user_id.to_string(),
+            email: email.map(|value| value.to_string()),
             org_id: None,
             roles: roles.iter().map(|role| (*role).to_string()).collect(),
             session_id: "session_daisy_test".to_string(),
             auth_method: AuthMethod::Bearer,
         }
+    }
+
+    fn principal_with_roles(roles: &[&str]) -> Principal {
+        principal_with_identity("user_daisy_test", Some("owner@greenhatsec.com"), roles)
     }
 
     fn build_daisy_contract_router(principal: Option<Principal>) -> Router {
@@ -1761,6 +1781,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daisy_owner_email_fallback_can_manage_acl_without_forwarded_headers() {
+        let list_shares_called = Arc::new(AtomicBool::new(false));
+        let list_shares_called_flag = list_shares_called.clone();
+
+        let responder: StubResponder = Arc::new(move |method, path, query, _body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=eq.note_bobby")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_bobby","title":"Bobby note","content":"owned","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-10T10:00:00Z","owner_user_id":"legacy_owner_id","owner_email":"bobby@greenhatsec.com"}]"#.to_string(),
+                );
+            }
+
+            if method == Method::GET
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("select=id%2Cnote_id%2Cshared_with_user_id")
+                && query.contains("note_id=eq.note_bobby")
+            {
+                list_shares_called_flag.store(true, Ordering::SeqCst);
+                return (StatusCode::OK, "[]".to_string());
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_identity(
+            "bobby_user_id_from_session",
+            Some("Bobby@GreenHatSec.com"),
+            &["owner"],
+        )));
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/daisy-notes/notes/note_bobby/share")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_eq!(body["ok"], true);
+        assert_eq!(list_shares_called.load(Ordering::SeqCst), true);
+    }
+
+    #[tokio::test]
     async fn daisy_owner_can_upsert_and_remove_shares_via_data_plane() {
         let update_called = Arc::new(AtomicBool::new(false));
         let insert_called = Arc::new(AtomicBool::new(false));
@@ -1981,6 +2054,47 @@ mod tests {
         let target = normalize_target(&payload).expect("target expected");
         assert_eq!(target.shared_with_user_id.as_deref(), Some("user_123"));
         assert_eq!(target.shared_with_email, None);
+    }
+
+    #[test]
+    fn scope_from_headers_prefers_trusted_principal_email() {
+        let principal = principal_with_identity(
+            " user_daisy_test ",
+            Some("Bobby@GreenHatSec.com"),
+            &["owner"],
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-daisy-session-user-id",
+            "user_daisy_test".parse().unwrap(),
+        );
+        headers.insert(
+            "x-daisy-session-user-email",
+            "spoofed@greenhatsec.com".parse().unwrap(),
+        );
+
+        let scope = scope_from_headers(&principal, &headers);
+        assert_eq!(scope.user_id, "user_daisy_test");
+        assert_eq!(scope.email.as_deref(), Some("bobby@greenhatsec.com"));
+    }
+
+    #[test]
+    fn scope_from_headers_uses_compatibility_headers_when_principal_email_missing() {
+        let principal = principal_with_identity("user_daisy_test", None, &["owner"]);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-daisy-session-user-id",
+            "user_daisy_test".parse().unwrap(),
+        );
+        headers.insert(
+            "x-daisy-session-user-email",
+            "Compat@GreenHatSec.com".parse().unwrap(),
+        );
+
+        let scope = scope_from_headers(&principal, &headers);
+        assert_eq!(scope.email.as_deref(), Some("compat@greenhatsec.com"));
     }
 
     #[test]

@@ -42,6 +42,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
 fn test_principal(roles: &[&str]) -> Principal {
     Principal {
         user_id: "test-user".into(),
+        email: None,
         org_id: None,
         roles: roles.iter().map(|s| s.to_string()).collect(),
         session_id: "test-session".into(),

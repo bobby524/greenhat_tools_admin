@@ -139,6 +139,7 @@ mod tests {
     fn actor_from_principal_maps_correctly() {
         let p = Principal {
             user_id: "usr_1".into(),
+            email: None,
             org_id: None,
             roles: vec!["admin".into(), "viewer".into()],
             session_id: "sess_1".into(),
@@ -154,6 +155,7 @@ mod tests {
     fn actor_from_principal_empty_roles() {
         let p = Principal {
             user_id: "usr_2".into(),
+            email: None,
             org_id: None,
             roles: vec![],
             session_id: "sess_2".into(),

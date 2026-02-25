@@ -154,6 +154,8 @@ struct BaSession {
 struct BaUser {
     id: String,
     #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
     role: Option<String>,
     /// Populated when the BetterAuth organization plugin is active.
     #[serde(rename = "organizationId", default)]
@@ -178,6 +180,49 @@ impl BetterAuthClient {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             cookie_name: cookie_name.into(),
             cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn canonical_user_id(session_user_id: &str, user_id: &str) -> String {
+        let session_user_id = session_user_id.trim();
+        let user_id = user_id.trim();
+
+        if !session_user_id.is_empty() {
+            if !user_id.is_empty() && session_user_id != user_id {
+                tracing::warn!(
+                    session_user_id,
+                    user_id,
+                    "BetterAuth session.userId mismatch with user.id; preferring session.userId"
+                );
+            }
+            return session_user_id.to_owned();
+        }
+
+        user_id.to_owned()
+    }
+
+    fn normalize_email(email: Option<String>) -> Option<String> {
+        email
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn principal_from_session_data(
+        data: BetterAuthSessionResponse,
+        auth_method: AuthMethod,
+    ) -> Principal {
+        let mut roles = Vec::new();
+        if let Some(role) = data.user.role {
+            roles.push(role);
+        }
+
+        Principal {
+            user_id: Self::canonical_user_id(&data.session.user_id, &data.user.id),
+            email: Self::normalize_email(data.user.email),
+            org_id: data.user.organization_id,
+            roles,
+            session_id: data.session.id,
+            auth_method,
         }
     }
 
@@ -354,18 +399,7 @@ impl SessionValidator for BetterAuthClient {
             SessionCredential::Bearer(_) => AuthMethod::Bearer,
         };
 
-        let mut roles = Vec::new();
-        if let Some(role) = data.user.role {
-            roles.push(role);
-        }
-
-        let principal = Principal {
-            user_id: data.user.id,
-            org_id: data.user.organization_id,
-            roles,
-            session_id: data.session.id,
-            auth_method,
-        };
+        let principal = Self::principal_from_session_data(data, auth_method);
 
         self.cache_insert(cache_key, principal.clone());
 
@@ -424,6 +458,7 @@ impl SessionValidator for NoopValidator {
         };
         Ok(Principal {
             user_id: "test-user".into(),
+            email: None,
             org_id: None,
             roles: vec![],
             session_id: "test-session".into(),
@@ -453,11 +488,60 @@ mod tests {
     fn sample_principal() -> Principal {
         Principal {
             user_id: "u1".into(),
+            email: None,
             org_id: None,
             roles: vec![],
             session_id: "s1".into(),
             auth_method: AuthMethod::Cookie,
         }
+    }
+
+    #[test]
+    fn principal_from_session_data_prefers_session_user_id_and_normalizes_email() {
+        let response = BetterAuthSessionResponse {
+            session: BaSession {
+                id: "sess_1".into(),
+                user_id: "user_from_session".into(),
+            },
+            user: BaUser {
+                id: "user_from_user_object".into(),
+                email: Some("  Bobby@GreenHatSec.com  ".into()),
+                role: Some("admin".into()),
+                organization_id: Some("org_1".into()),
+            },
+        };
+
+        let principal = BetterAuthClient::principal_from_session_data(response, AuthMethod::Cookie);
+
+        assert_eq!(principal.user_id, "user_from_session");
+        assert_eq!(principal.email, Some("bobby@greenhatsec.com".to_string()));
+        assert_eq!(principal.roles, vec!["admin".to_string()]);
+        assert_eq!(principal.org_id, Some("org_1".to_string()));
+        assert_eq!(principal.session_id, "sess_1");
+        assert_eq!(principal.auth_method, AuthMethod::Cookie);
+    }
+
+    #[test]
+    fn principal_from_session_data_falls_back_to_user_id_when_session_user_id_empty() {
+        let response = BetterAuthSessionResponse {
+            session: BaSession {
+                id: "sess_2".into(),
+                user_id: "   ".into(),
+            },
+            user: BaUser {
+                id: "user_from_user_object".into(),
+                email: Some("   ".into()),
+                role: None,
+                organization_id: None,
+            },
+        };
+
+        let principal = BetterAuthClient::principal_from_session_data(response, AuthMethod::Bearer);
+
+        assert_eq!(principal.user_id, "user_from_user_object");
+        assert_eq!(principal.email, None);
+        assert!(principal.roles.is_empty());
+        assert_eq!(principal.auth_method, AuthMethod::Bearer);
     }
 
     #[test]
