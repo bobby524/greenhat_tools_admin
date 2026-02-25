@@ -475,6 +475,51 @@ async fn supabase_get_rows<T: DeserializeOwned>(
     parse_json_rows(request_id, context, &body)
 }
 
+fn share_write_error(
+    request_id: &str,
+    context: &'static str,
+    status: StatusCode,
+    raw_body: &str,
+) -> Response {
+    let details = json!({
+        "context": context,
+        "upstreamStatus": status.as_u16(),
+        "upstreamError": supabase_error_message(raw_body),
+    });
+
+    match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => daisy_error(
+            request_id,
+            StatusCode::BAD_REQUEST,
+            "DAISY_SHARE_WRITE_REJECTED",
+            "Share write rejected by Daisy data plane",
+            details,
+        ),
+        StatusCode::CONFLICT => daisy_error(
+            request_id,
+            StatusCode::CONFLICT,
+            "DAISY_SHARE_WRITE_CONFLICT",
+            "Share write conflicted with existing ACL state",
+            details,
+        ),
+        _ => data_plane_error(
+            request_id,
+            "DAISY_SHARE_WRITE_FAILED",
+            "Daisy data plane share write failed",
+            details,
+        ),
+    }
+}
+
+fn share_write_empty_result_error(request_id: &str, context: &'static str) -> Response {
+    data_plane_error(
+        request_id,
+        "DAISY_SHARE_WRITE_EMPTY_RESULT",
+        "Daisy data plane share write returned no rows",
+        json!({ "context": context }),
+    )
+}
+
 fn add_archived_filter(url: &mut Url, include_archived: bool) {
     if include_archived {
         return;
@@ -807,65 +852,88 @@ async fn upsert_note_share_in_data_plane(
     note_id: &str,
     target: &DaisyShareTarget,
     permission: &str,
-    scope: &DaisyActorScope,
     request_id: &str,
 ) -> Result<DaisyShareRow, Response> {
-    let conflict_target = if target.shared_with_user_id.is_some() {
-        "note_id,shared_with_user_id"
-    } else {
-        "note_id,shared_with_email"
-    };
-
-    let mut url = table_url(base, "daisy_note_shares", request_id)?;
+    let mut update_url = table_url(base, "daisy_note_shares", request_id)?;
     {
-        let mut qp = url.query_pairs_mut();
-        qp.append_pair("on_conflict", conflict_target);
+        let mut qp = update_url.query_pairs_mut();
+        qp.append_pair("select", SHARE_SELECT_FIELDS);
+        qp.append_pair("note_id", &format!("eq.{note_id}"));
+        if let Some(shared_with_user_id) = target.shared_with_user_id.as_deref() {
+            qp.append_pair("shared_with_user_id", &format!("eq.{shared_with_user_id}"));
+        }
+        if let Some(shared_with_email) = target.shared_with_email.as_deref() {
+            qp.append_pair("shared_with_email", &format!("eq.{shared_with_email}"));
+        }
+    }
+
+    let update_payload = json!({
+        "permission": permission,
+    });
+
+    let (update_status, update_body) = supabase_request_text(
+        request_id,
+        "update_note_share",
+        client
+            .patch(update_url.as_str())
+            .header("Prefer", "return=representation")
+            .json(&update_payload),
+    )
+    .await?;
+
+    if !update_status.is_success() {
+        return Err(share_write_error(
+            request_id,
+            "update_note_share",
+            update_status,
+            &update_body,
+        ));
+    }
+
+    let updated_rows =
+        parse_json_rows::<DaisyShareRow>(request_id, "update_note_share", &update_body)?;
+    if let Some(existing) = updated_rows.into_iter().next() {
+        return Ok(existing);
+    }
+
+    let mut insert_url = table_url(base, "daisy_note_shares", request_id)?;
+    {
+        let mut qp = insert_url.query_pairs_mut();
         qp.append_pair("select", SHARE_SELECT_FIELDS);
     }
 
-    let payload = json!({
+    let insert_payload = json!({
         "note_id": note_id,
         "shared_with_user_id": target.shared_with_user_id,
         "shared_with_email": target.shared_with_email,
         "permission": permission,
-        "shared_by_user_id": scope.user_id,
-        "shared_by_email": scope.email,
     });
 
-    let (status, body) = supabase_request_text(
+    let (insert_status, insert_body) = supabase_request_text(
         request_id,
-        "upsert_note_share",
+        "insert_note_share",
         client
-            .post(url.as_str())
-            .header(
-                "Prefer",
-                "resolution=merge-duplicates,return=representation",
-            )
-            .json(&payload),
+            .post(insert_url.as_str())
+            .header("Prefer", "return=representation")
+            .json(&insert_payload),
     )
     .await?;
 
-    if !status.is_success() {
-        return Err(data_plane_error(
+    if !insert_status.is_success() {
+        return Err(share_write_error(
             request_id,
-            "DAISY_DATA_PLANE_ERROR",
-            "Daisy data plane share upsert failed",
-            json!({
-                "upstreamStatus": status.as_u16(),
-                "upstreamError": supabase_error_message(&body),
-            }),
+            "insert_note_share",
+            insert_status,
+            &insert_body,
         ));
     }
 
-    let rows = parse_json_rows::<DaisyShareRow>(request_id, "upsert_note_share", &body)?;
-    rows.into_iter().next().ok_or_else(|| {
-        data_plane_error(
-            request_id,
-            "DAISY_DATA_PLANE_ERROR",
-            "Daisy data plane share upsert returned no rows",
-            json!({}),
-        )
-    })
+    let inserted_rows =
+        parse_json_rows::<DaisyShareRow>(request_id, "insert_note_share", &insert_body)?;
+    inserted_rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| share_write_empty_result_error(request_id, "insert_note_share"))
 }
 
 async fn remove_note_share_in_data_plane(
@@ -1205,7 +1273,6 @@ pub async fn upsert_note_share(
         &note_id,
         &target,
         permission,
-        &scope,
         &request_id,
     )
     .await
@@ -1695,9 +1762,11 @@ mod tests {
 
     #[tokio::test]
     async fn daisy_owner_can_upsert_and_remove_shares_via_data_plane() {
-        let upsert_called = Arc::new(AtomicBool::new(false));
+        let update_called = Arc::new(AtomicBool::new(false));
+        let insert_called = Arc::new(AtomicBool::new(false));
         let delete_called = Arc::new(AtomicBool::new(false));
-        let upsert_flag = upsert_called.clone();
+        let update_flag = update_called.clone();
+        let insert_flag = insert_called.clone();
         let delete_flag = delete_called.clone();
 
         let responder: StubResponder = Arc::new(move |method, path, query, body| {
@@ -1711,12 +1780,22 @@ mod tests {
                 );
             }
 
+            if method == Method::PATCH
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("note_id=eq.note_owner")
+                && query.contains("shared_with_user_id=eq.user_2")
+            {
+                assert!(body.contains("\"permission\":\"editor\""));
+                update_flag.store(true, Ordering::SeqCst);
+                return (StatusCode::OK, "[]".to_string());
+            }
+
             if method == Method::POST && path == "/rest/v1/daisy_note_shares" {
-                assert!(query.contains("on_conflict="));
+                assert!(!query.contains("on_conflict="));
                 assert!(body.contains("\"note_id\":\"note_owner\""));
                 assert!(body.contains("\"shared_with_user_id\":\"user_2\""));
                 assert!(body.contains("\"permission\":\"editor\""));
-                upsert_flag.store(true, Ordering::SeqCst);
+                insert_flag.store(true, Ordering::SeqCst);
                 return (
                     StatusCode::OK,
                     r#"[{"id":"share_1","note_id":"note_owner","shared_with_user_id":"user_2","shared_with_email":null,"permission":"editor","created_at":"2026-02-11T12:00:00Z","updated_at":"2026-02-11T12:00:00Z"}]"#.to_string(),
@@ -1759,7 +1838,8 @@ mod tests {
         let upsert_body = body_json(upsert_resp).await;
         assert_eq!(upsert_body["data"]["share"]["id"], "share_1");
         assert_eq!(upsert_body["data"]["share"]["permission"], "editor");
-        assert!(upsert_called.load(Ordering::SeqCst));
+        assert!(update_called.load(Ordering::SeqCst));
+        assert!(insert_called.load(Ordering::SeqCst));
 
         let delete_resp = router
             .oneshot(
@@ -1777,6 +1857,104 @@ mod tests {
         let delete_body = body_json(delete_resp).await;
         assert_eq!(delete_body["data"]["removed"], true);
         assert!(delete_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn daisy_share_upsert_rejects_invalid_payload_without_data_plane_calls() {
+        let data_plane_called = Arc::new(AtomicBool::new(false));
+        let data_plane_called_flag = data_plane_called.clone();
+
+        let responder: StubResponder = Arc::new(move |_method, _path, _query, _body| {
+            data_plane_called_flag.store(true, Ordering::SeqCst);
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["owner"])));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/daisy-notes/notes/note_owner/share")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"sharedWithUserId":"user_2"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "DAISY_INVALID_SHARE_PAYLOAD");
+        assert_eq!(data_plane_called.load(Ordering::SeqCst), false);
+    }
+
+    #[tokio::test]
+    async fn daisy_share_upsert_maps_data_plane_write_rejections_to_contract_error() {
+        let responder: StubResponder = Arc::new(move |method, path, query, _body| {
+            if method == Method::GET
+                && path == "/rest/v1/daisy_notes"
+                && query.contains("id=eq.note_owner")
+            {
+                return (
+                    StatusCode::OK,
+                    r#"[{"id":"note_owner","title":"Owner note","content":"owned","tags":[],"pinned":false,"archived":false,"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-10T10:00:00Z","owner_user_id":"user_daisy_test","owner_email":null}]"#.to_string(),
+                );
+            }
+
+            if method == Method::PATCH
+                && path == "/rest/v1/daisy_note_shares"
+                && query.contains("note_id=eq.note_owner")
+                && query.contains("shared_with_user_id=eq.user_2")
+            {
+                return (StatusCode::OK, "[]".to_string());
+            }
+
+            if method == Method::POST && path == "/rest/v1/daisy_note_shares" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    r#"{"message":"column shared_by_user_id does not exist"}"#.to_string(),
+                );
+            }
+
+            (StatusCode::OK, "[]".to_string())
+        });
+
+        let stub = spawn_supabase_stub(responder).await;
+        let _env = SupabaseEnvGuard::acquire(&stub.base_url, "test_service_key").await;
+
+        let router = build_daisy_contract_router(Some(principal_with_roles(&["owner"])));
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/daisy-notes/notes/note_owner/share")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"permission":"editor","sharedWithUserId":"user_2"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(resp).await;
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "DAISY_SHARE_WRITE_REJECTED");
+        assert_eq!(
+            body["error"]["message"],
+            "Share write rejected by Daisy data plane"
+        );
+        assert_eq!(body["error"]["details"]["context"], "insert_note_share");
+        assert_eq!(body["error"]["details"]["upstreamStatus"], 400);
+        assert!(body["error"]["details"]["upstreamError"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("shared_by_user_id"));
     }
 
     #[test]
