@@ -1,0 +1,6 @@
+target/
+.git/
+.next/
+.vercel/
+vendor/
+*.log
