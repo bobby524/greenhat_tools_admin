@@ -124,6 +124,48 @@ See:
 - `docs/schemas/mcp_tool_call_response.v0.schema.json`
 - `docs/openapi/mcp.v1.yaml`
 
+## Live Production Verification (Agent Tokens)
+
+Use this flow to verify token auth + MCP tool invocation + audit correlation in production.
+
+1. In Admin UI (`admin.greenhatsec.com`), create a token for Bobby with scope `tools:invoke`.
+2. Call MCP with `Authorization: Bearer agt_...` to `POST /v1/tools/call`.
+3. Verify response + logs using a fixed `x-request-id`.
+
+Example request:
+
+```http
+POST /v1/tools/call
+Authorization: Bearer agt_<token>
+Content-Type: application/json
+x-request-id: verify-bobby-001
+```
+
+```json
+{
+  "tool": "http_get",
+  "params": {
+    "url": "https://example.com"
+  }
+}
+```
+
+Expected in hardened env (host not allowlisted):
+- HTTP status `200`
+- Body indicates tool-level failure, e.g. `{"success":false,"data":"egress denied: host \"example.com\" not in allowlist"}`
+
+Audit evidence to confirm (same `request_id`):
+- `auth.login_success` with `auth_mode: "agent_token"`, `actor_type: "agent"`, token id/name
+- `tool.invoke_start`
+- `gateway.egress_blocked`
+- `tool.invoke_failure` (error kind `egress_blocked`)
+
+Verification checklist:
+- [ ] Token created for Bobby in admin UI
+- [ ] MCP call sent via `POST /v1/tools/call` with Bearer `agt_...`
+- [ ] Response received with expected policy behavior
+- [ ] Audit events present and correlated by `x-request-id`
+
 ## Implementation best-practice reference
 
 For refactoring additional modules into the Rust gateway pattern, use:
